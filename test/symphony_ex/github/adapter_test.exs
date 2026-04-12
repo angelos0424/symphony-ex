@@ -769,6 +769,131 @@ defmodule SymphonyEx.GitHub.AdapterTest do
            end)
   end
 
+  test "write_run_record ignores unsupported nested project field values" do
+    alias SymphonyEx.Orchestrator.Lifecycle
+
+    lifecycle =
+      Lifecycle.new(
+        project_status_mapping: %{{:running, :any} => "In Progress"},
+        project_field_mapping: %{
+          {:running, :any} => %{
+            "Owner" => "Codex",
+            "metadata" => %{"status" => "Ready"},
+            "attempts" => [1, 2]
+          }
+        }
+      )
+
+    assert Lifecycle.resolve_project_fields(lifecycle, :running, nil) == %{"Owner" => "Codex"}
+
+    issue = %Issue{id: "I_3", identifier: "56", title: "Title", description: "", state: "Todo"}
+    parent = self()
+
+    request_fun = fn request ->
+      send(parent, {:github_request, request})
+
+      cond do
+        request.method == :patch and
+            String.ends_with?(to_string(request.url), "/repos/example/repo/issues/56") ->
+          {:ok, %Req.Response{status: 200, body: %{"body" => request.options[:json][:body]}}}
+
+        to_string(request.url) == "https://api.github.com/graphql" and
+            String.contains?(request.options[:json]["query"], "query ProjectItems") ->
+          {:ok,
+           %Req.Response{
+             status: 200,
+             body: %{
+               "data" => %{
+                 "organization" => %{
+                   "projectV2" => %{
+                     "id" => "PVT_fields",
+                     "fields" => %{
+                       "nodes" => [
+                         %{
+                           "id" => "status-field",
+                           "name" => "Status",
+                           "options" => [
+                             %{"id" => "opt_progress", "name" => "In Progress"}
+                           ]
+                         },
+                         %{"id" => "owner-field", "name" => "Owner", "dataType" => "TEXT"}
+                       ]
+                     },
+                     "items" => %{
+                       "nodes" => [
+                         %{
+                           "id" => "PVTI_fields",
+                           "content" => %{"number" => 56},
+                           "fieldValues" => %{
+                             "nodes" => [
+                               %{
+                                 "name" => "Todo",
+                                 "field" => %{
+                                   "id" => "status-field",
+                                   "name" => "Status",
+                                   "options" => [
+                                     %{"id" => "opt_progress", "name" => "In Progress"}
+                                   ]
+                                 }
+                               }
+                             ]
+                           }
+                         }
+                       ]
+                     }
+                   }
+                 },
+                 "user" => nil
+               }
+             }
+           }}
+
+        to_string(request.url) == "https://api.github.com/graphql" and
+            String.contains?(request.options[:json]["query"], "mutation UpdateProject") ->
+          {:ok,
+           %Req.Response{
+             status: 200,
+             body: %{
+               "data" => %{
+                 "updateProjectV2ItemFieldValue" => %{"projectV2Item" => %{"id" => "PVTI_fields"}}
+               }
+             }
+           }}
+      end
+    end
+
+    opts = [
+      api_key: "gh-token",
+      owner: "example",
+      repo: "repo",
+      project_number: 7,
+      lifecycle: lifecycle,
+      request_fun: request_fun
+    ]
+
+    assert {:ok, %{"body" => body}} =
+             Adapter.write_run_record(issue, %{status: :running, attempt: 1}, opts)
+
+    assert body =~ "status: running"
+    requests = collect_requests(4)
+
+    project_updates =
+      Enum.filter(requests, fn request ->
+        to_string(request.url) == "https://api.github.com/graphql" and
+          String.contains?(request.options[:json]["query"], "mutation UpdateProject")
+      end)
+
+    assert Enum.count(project_updates) == 2
+
+    assert Enum.any?(project_updates, fn request ->
+             request.options[:json]["variables"]["optionId"] == "opt_progress"
+           end)
+
+    assert Enum.any?(project_updates, fn request ->
+             request.options[:json]["variables"]["text"] == "Codex"
+           end)
+  end
+
   describe "lifecycle config interop" do
     test "custom lifecycle mapping drives actual issue state and project option payloads" do
       alias SymphonyEx.Orchestrator.Lifecycle

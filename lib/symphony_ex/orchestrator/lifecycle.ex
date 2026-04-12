@@ -79,12 +79,35 @@ defmodule SymphonyEx.Orchestrator.Lifecycle do
           Keyword.get(opts, :project_status_mapping, %{})
         ),
       project_field_mapping:
-        Map.merge(
-          default.project_field_mapping,
-          Keyword.get(opts, :project_field_mapping, %{})
-        )
+        default.project_field_mapping
+        |> Map.merge(Keyword.get(opts, :project_field_mapping, %{}))
+        |> normalize_project_field_mapping()
     }
   end
+
+  @spec normalize_project_field_mapping(map()) :: project_field_mapping()
+  defp normalize_project_field_mapping(mapping) do
+    mapping
+    |> Enum.map(fn {state_key, fields} -> {state_key, normalize_project_fields(fields)} end)
+    |> Map.new()
+  end
+
+  @spec normalize_project_fields(term()) :: %{String.t() => project_field_value()}
+  defp normalize_project_fields(fields) when is_map(fields) do
+    fields
+    |> Enum.filter(fn {_name, value} -> supported_project_field_value?(value) end)
+    |> Map.new()
+  end
+
+  defp normalize_project_fields(_fields), do: %{}
+
+  @spec supported_project_field_value?(term()) :: boolean()
+  defp supported_project_field_value?(value)
+
+  defp supported_project_field_value?(value) when is_binary(value), do: true
+  defp supported_project_field_value?(value) when is_number(value), do: true
+  defp supported_project_field_value?(nil), do: true
+  defp supported_project_field_value?(_value), do: false
 
   @doc """
   Resolves the desired GitHub issue state (`:open` or `:closed`) for the given
