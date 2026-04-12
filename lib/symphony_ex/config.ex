@@ -446,7 +446,11 @@ defmodule SymphonyEx.Config do
   @spec normalize_yaml(map()) :: keyword()
   defp normalize_yaml(map) when is_map(map) do
     map
-    |> Enum.map(fn {k, v} -> {normalize_key(k), normalize_yaml(v)} end)
+    |> Enum.map(fn {k, v} ->
+      normalized_key = normalize_key(k)
+      normalized_value = if normalized_key == :project_fields, do: v, else: normalize_yaml(v)
+      {normalized_key, normalized_value}
+    end)
   end
 
   defp normalize_yaml(list) when is_list(list), do: Enum.map(list, &normalize_yaml/1)
@@ -479,7 +483,7 @@ defmodule SymphonyEx.Config do
   defp normalize_key(key) when is_binary(key) do
     key
     |> String.replace("-", "_")
-    |> String.to_atom()
+    |> existing_atom!()
   end
 
   defp normalize_key(key) when is_atom(key), do: key
