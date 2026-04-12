@@ -4,7 +4,7 @@ defmodule SymphonyEx.Workspace do
   """
 
   alias SymphonyEx.Domain.Issue
-  alias SymphonyEx.SessionStore
+  alias SymphonyEx.{SessionStore, SourceRepo}
 
   @type shell_fun :: (String.t(), [String.t()], keyword() -> {binary(), non_neg_integer()})
   @type prepare_reason :: :fresh | {:reset, atom()} | {:recover, SessionStore.session_data()}
@@ -25,6 +25,7 @@ defmodule SymphonyEx.Workspace do
 
     with :ok <- ensure_within_root(root, path),
          :ok <- File.mkdir_p(root),
+         :ok <- SourceRepo.ensure_ready(opts),
          {:ok, reason} <- preflight_session(path) do
       case reason do
         {:recover, session} ->

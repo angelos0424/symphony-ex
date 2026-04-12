@@ -99,8 +99,10 @@ defmodule SymphonyEx.Config.Schema do
               type: :keyword_list,
               required: true,
               keys: [
-                root: [type: :string, required: true],
-                source_repo_path: [type: :string, required: true],
+                root: [type: :string],
+                source_repo_path: [type: :string],
+                source_repo_url: [type: :string],
+                source_cache_root: [type: :string],
                 symphony_repo_path: [type: :string, default: ""],
                 hooks: [
                   type: :keyword_list,

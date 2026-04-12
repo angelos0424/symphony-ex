@@ -172,7 +172,10 @@ defmodule SymphonyEx.OrchestratorTest do
     assert Enum.any?(Control.updates(), fn %{issue: updated_issue, payload: payload} ->
              updated_issue.identifier == "SYM-HOOK-1" and
                payload.status == :retry_queued and
-               String.contains?(to_string(Map.get(payload, :details, "")), "before_run_hook_failed")
+               String.contains?(
+                 to_string(Map.get(payload, :details, "")),
+                 "before_run_hook_failed"
+               )
            end)
   end
 
@@ -216,7 +219,10 @@ defmodule SymphonyEx.OrchestratorTest do
     assert Enum.any?(Control.updates(), fn %{issue: updated_issue, payload: payload} ->
              updated_issue.identifier == "SYM-HOOK-2" and
                payload.status == :retry_queued and
-               String.contains?(to_string(Map.get(payload, :details, "")), "after_run_hook_failed")
+               String.contains?(
+                 to_string(Map.get(payload, :details, "")),
+                 "after_run_hook_failed"
+               )
            end)
   end
 
@@ -437,9 +443,7 @@ defmodule SymphonyEx.OrchestratorTest do
     start_supervised!({Control, test_pid: self(), candidate_batches: [[]]})
 
     orchestrator =
-      start_orchestrator(
-        concurrency_limits: %{"code" => 1, "dangerously-new-class" => 9}
-      )
+      start_orchestrator(concurrency_limits: %{"code" => 1, "dangerously-new-class" => 9})
 
     snapshot = Orchestrator.snapshot(orchestrator)
 

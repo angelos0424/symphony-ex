@@ -395,6 +395,88 @@ defmodule SymphonyEx.ConfigTest do
       )
     end
 
+    test "resolves SOURCE_REPO_URL into a canonical cached source repo path" do
+      remote = git_fixture_repo!("source-repo-url")
+
+      cache_root =
+        Path.join(System.tmp_dir!(), "source-cache-#{System.unique_integer([:positive])}")
+
+      workflow = """
+      ---
+      tracker:
+        owner: openai
+        repo: symphony
+      workspace:
+        source_repo_url: #{remote}
+        source_cache_root: #{cache_root}
+      ---
+      """
+
+      path = write_workflow!(workflow)
+
+      with_env([{"GITHUB_TOKEN", "ghs_test"}], fn ->
+        assert {:ok, config} = Config.load(path)
+        assert config[:workspace][:root] == Path.expand(".symphony/worktrees", File.cwd!())
+
+        assert config[:workspace][:source_repo_path] ==
+                 Path.join(cache_root, expected_cache_dir_for(remote))
+      end)
+    end
+
+    test "loading config with SOURCE_REPO_URL stays side-effect free" do
+      cache_root =
+        Path.join(System.tmp_dir!(), "source-cache-#{System.unique_integer([:positive])}")
+
+      workflow = """
+      ---
+      tracker:
+        owner: openai
+        repo: symphony
+      workspace:
+        source_repo_url: https://github.com/example/project.git
+        source_cache_root: #{cache_root}
+      ---
+      """
+
+      path = write_workflow!(workflow)
+      expected_path = Path.join(cache_root, "github.com__example__project")
+
+      with_env([{"GITHUB_TOKEN", "ghs_test"}], fn ->
+        assert {:ok, config} = Config.load(path)
+        assert config[:workspace][:source_repo_path] == expected_path
+        refute File.exists?(expected_path)
+      end)
+    end
+
+    test "SOURCE_REPO_PATH from env wins over SOURCE_REPO_URL" do
+      explicit_repo = git_fixture_repo!("explicit-source")
+      remote = git_fixture_repo!("ignored-remote")
+
+      workflow = """
+      ---
+      tracker:
+        owner: openai
+        repo: symphony
+      workspace:
+        source_repo_url: #{remote}
+        source_cache_root: /tmp/ignored-cache
+      ---
+      """
+
+      path = write_workflow!(workflow)
+
+      with_env(
+        [
+          {"GITHUB_TOKEN", "ghs_test"},
+          {"SOURCE_REPO_PATH", explicit_repo}
+        ],
+        fn ->
+          assert {:ok, config} = Config.load(path)
+          assert config[:workspace][:source_repo_path] == explicit_repo
+        end
+      )
+    end
+
     test "returns a clean error for invalid integer env values" do
       workflow = """
       ---
@@ -428,6 +510,18 @@ defmodule SymphonyEx.ConfigTest do
     path
   end
 
+  defp git_fixture_repo!(name) do
+    root = Path.join(System.tmp_dir!(), "#{name}-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(root)
+    File.write!(Path.join(root, "README.md"), "# fixture\n")
+    {_, 0} = System.cmd("git", ["init", "-b", "main"], cd: root)
+    {_, 0} = System.cmd("git", ["config", "user.name", "Test User"], cd: root)
+    {_, 0} = System.cmd("git", ["config", "user.email", "test@example.com"], cd: root)
+    {_, 0} = System.cmd("git", ["add", "README.md"], cd: root)
+    {_, 0} = System.cmd("git", ["commit", "-m", "init"], cd: root)
+    root
+  end
+
   @tracked_env_vars [
     "TRACKER_KIND",
     "GITHUB_TOKEN",
@@ -440,6 +534,8 @@ defmodule SymphonyEx.ConfigTest do
     "TEAM_KEY",
     "WORKSPACE_ROOT",
     "SOURCE_REPO_PATH",
+    "SOURCE_REPO_URL",
+    "SOURCE_CACHE_ROOT",
     "SYMPHONY_REPO_PATH",
     "GITHUB_ISSUE_IDENTIFIER",
     "ISSUE_IDENTIFIER",
@@ -453,6 +549,15 @@ defmodule SymphonyEx.ConfigTest do
     "SYMPHONY_WORKFLOW_PATH",
     "WORKFLOW_PATH"
   ]
+
+  defp expected_cache_dir_for(url) do
+    url
+    |> String.trim()
+    |> String.trim_trailing("/")
+    |> String.replace_suffix(".git", "")
+    |> :erlang.md5()
+    |> Base.encode16(case: :lower)
+  end
 
   defp with_env(pairs, fun) do
     keys = Enum.uniq(@tracked_env_vars ++ Enum.map(pairs, &elem(&1, 0)))

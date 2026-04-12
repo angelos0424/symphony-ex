@@ -9,8 +9,9 @@
 | `GITHUB_TOKEN` | GitHub Personal Access Token (repo, project 권한) | `ghp_xxx` |
 | `GITHUB_OWNER` | GitHub 조직/사용자명 | `openai` |
 | `GITHUB_REPO` | 대상 저장소명 | `symphony` |
-| `WORKSPACE_ROOT` | 워크스페이스 루트 디렉토리 | `/opt/symphony/worktrees` |
-| `SOURCE_REPO_PATH` | 소스 Git 저장소 경로 | `/opt/symphony/source-repo` |
+| `WORKSPACE_ROOT` | 워크스페이스 루트 디렉토리 | `/opt/symphony/worktrees` (미설정 시 `./.symphony/worktrees`) |
+| `SOURCE_REPO_PATH` | 소스 Git 저장소 경로, 명시 시 최우선 | `/opt/symphony/source-repo` |
+| `SOURCE_REPO_URL` | 소스 저장소 Git URL, 자동 bootstrap 입력 | `git@github.com:my-org/my-repo.git` |
 
 ### 선택
 
@@ -18,6 +19,7 @@
 |------|------|--------|
 | `GITHUB_PROJECT_NUMBER` | GitHub Project v2 번호 | (없음) |
 | `TRACKER_KIND` | 트래커 종류 (`github` / `linear`) | `github` |
+| `SOURCE_CACHE_ROOT` | `SOURCE_REPO_URL`용 로컬 clone 캐시 루트 | `./.symphony/source-cache` |
 | `SYMPHONY_REPO_PATH` | Symphony 설정 저장소 경로 | (없음) |
 | `GITHUB_ISSUE_IDENTIFIER` (`ISSUE_IDENTIFIER` legacy alias) | 특정 이슈만 실행 (예: `#42`) | (없음, 폴링 모드) |
 
@@ -95,9 +97,10 @@ CMD ["bin/symphony_ex", "start"]
 ### docker-compose.yml
 
 > [!IMPORTANT]
-> `SOURCE_REPO_PATH` cannot be an empty named volume. It must already contain a real writable Git
-> clone, because SymphonyEx runs `git worktree add/remove` against that repo and Git writes
-> metadata under `.git/worktrees` there.
+> `SOURCE_REPO_PATH` is still supported, but new installs can usually set just `SOURCE_REPO_URL`.
+> If `SOURCE_REPO_PATH` is omitted, SymphonyEx resolves a cache location under
+> `SOURCE_CACHE_ROOT` during config load, then clones or refreshes that repo before workspace use.
+> GitHub URL normalization is intentionally limited to standard `github.com` SSH/HTTPS repo forms.
 
 ```yaml
 version: "3.8"
@@ -109,14 +112,15 @@ services:
     volumes:
       - ./WORKFLOW.md:/app/WORKFLOW.md:ro
       - worktrees:/opt/symphony/worktrees
-      - /srv/my-repo:/opt/symphony/source-repo
+      - source-cache:/opt/symphony/source-cache
     environment:
       - GITHUB_TOKEN=${GITHUB_TOKEN}
       - GITHUB_OWNER=${GITHUB_OWNER}
       - GITHUB_REPO=${GITHUB_REPO}
       - GITHUB_PROJECT_NUMBER=${GITHUB_PROJECT_NUMBER:-}
       - WORKSPACE_ROOT=/opt/symphony/worktrees
-      - SOURCE_REPO_PATH=/opt/symphony/source-repo
+      - SOURCE_REPO_URL=git@github.com:my-org/my-repo.git
+      - SOURCE_CACHE_ROOT=/opt/symphony/source-cache
       - SYMPHONY_DASHBOARD_ENABLED=true
       - SYMPHONY_DASHBOARD_PORT=4000
       - SYMPHONY_DASHBOARD_HOST=0.0.0.0
@@ -127,6 +131,7 @@ services:
 
 volumes:
   worktrees:
+  source-cache:
 ```
 
 ---
@@ -159,7 +164,7 @@ EnvironmentFile=/opt/symphony-ex/.env
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/opt/symphony/worktrees /opt/symphony/source-repo
+ReadWritePaths=/opt/symphony/worktrees /opt/symphony/source-cache /opt/symphony/source-repo
 
 [Install]
 WantedBy=multi-user.target
@@ -175,10 +180,9 @@ MIX_ENV=prod mix release
 sudo mkdir -p /opt/symphony-ex
 sudo cp -r _build/prod/rel/symphony_ex/* /opt/symphony-ex/
 
-# 3. source repo 준비 (git worktree metadata가 여기에도 기록됨)
-sudo mkdir -p /opt/symphony
-sudo git clone git@github.com:my-org/my-repo.git /opt/symphony/source-repo
-sudo chown -R symphony:symphony /opt/symphony/source-repo
+# 3. 캐시/워크스페이스 디렉토리 준비
+sudo mkdir -p /opt/symphony/worktrees /opt/symphony/source-cache
+sudo chown -R symphony:symphony /opt/symphony/worktrees /opt/symphony/source-cache
 
 # 4. 환경변수 파일 생성
 sudo cat > /opt/symphony-ex/.env << 'EOF'
@@ -186,8 +190,10 @@ GITHUB_TOKEN=ghp_xxx
 GITHUB_OWNER=my-org
 GITHUB_REPO=my-repo
 WORKSPACE_ROOT=/opt/symphony/worktrees
-# Must be a real writable clone, not an empty directory.
-SOURCE_REPO_PATH=/opt/symphony/source-repo
+SOURCE_REPO_URL=git@github.com:my-org/my-repo.git
+SOURCE_CACHE_ROOT=/opt/symphony/source-cache
+# Optional advanced override. If set, this wins over SOURCE_REPO_URL.
+# SOURCE_REPO_PATH=/opt/symphony/source-repo
 SYMPHONY_LOG_FORMAT=json
 EOF
 
@@ -213,7 +219,10 @@ tracker:
   project-number: 7
 workspace:
   root: /opt/symphony/worktrees
-  source-repo-path: /opt/symphony/source-repo
+  source-repo-url: git@github.com:my-org/my-repo.git
+  source-cache-root: /opt/symphony/source-cache
+  # Optional advanced override. If set, this wins.
+  # source-repo-path: /opt/symphony/source-repo
 orchestrator:
   poll-interval-ms: 30000
   max-concurrent: 2
