@@ -185,4 +185,56 @@ defmodule SymphonyEx.WorkspaceTest do
 
     assert File.exists?(path)
   end
+
+  test "prepare bootstraps source repo url before creating a worktree" do
+    root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-workspace-test-#{System.unique_integer([:positive])}"
+      )
+
+    source_repo_path = Path.join(root, "cache/github.com__example__project")
+    issue = %Issue{id: "1", identifier: "SYM-99", title: "Title", description: "", state: "Todo"}
+    path = Workspace.path_for_issue(root, issue)
+    parent = self()
+
+    shell = fn
+      "git", ["clone", "https://github.com/example/project.git", ^source_repo_path], [] ->
+        File.mkdir_p!(source_repo_path)
+        send(parent, :cloned)
+        {"", 0}
+
+      "git", ["remote", "set-head", "origin", "--auto"], [cd: ^source_repo_path] ->
+        {"", 0}
+
+      "git", ["symbolic-ref", "refs/remotes/origin/HEAD"], [cd: ^source_repo_path] ->
+        {"refs/remotes/origin/main\n", 0}
+
+      "git", ["checkout", "--detach", "refs/remotes/origin/main"], [cd: ^source_repo_path] ->
+        {"", 0}
+
+      "git", ["worktree", "prune"], [cd: ^source_repo_path] ->
+        send(parent, :pruned)
+        {"", 0}
+
+      "git", ["worktree", "list", "--porcelain"], [cd: ^source_repo_path] ->
+        {"worktree #{source_repo_path}\n", 0}
+
+      "git", ["worktree", "add", "--detach", ^path, "HEAD"], [cd: ^source_repo_path] ->
+        send(parent, :added)
+        {"", 0}
+    end
+
+    assert {:ok, %{path: ^path, reason: :fresh}} =
+             Workspace.prepare(issue,
+               root: root,
+               source_repo_path: source_repo_path,
+               source_repo_url: "https://github.com/example/project.git",
+               shell_fun: shell
+             )
+
+    assert_received :cloned
+    assert_received :pruned
+    assert_received :added
+  end
 end

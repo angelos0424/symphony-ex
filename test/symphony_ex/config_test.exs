@@ -400,6 +400,31 @@ defmodule SymphonyEx.ConfigTest do
       end)
     end
 
+    test "loading config with SOURCE_REPO_URL stays side-effect free" do
+      cache_root =
+        Path.join(System.tmp_dir!(), "source-cache-#{System.unique_integer([:positive])}")
+
+      workflow = """
+      ---
+      tracker:
+        owner: openai
+        repo: symphony
+      workspace:
+        source_repo_url: https://github.com/example/project.git
+        source_cache_root: #{cache_root}
+      ---
+      """
+
+      path = write_workflow!(workflow)
+      expected_path = Path.join(cache_root, "github.com__example__project")
+
+      with_env([{"GITHUB_TOKEN", "ghs_test"}], fn ->
+        assert {:ok, config} = Config.load(path)
+        assert config[:workspace][:source_repo_path] == expected_path
+        refute File.exists?(expected_path)
+      end)
+    end
+
     test "SOURCE_REPO_PATH from env wins over SOURCE_REPO_URL" do
       explicit_repo = git_fixture_repo!("explicit-source")
       remote = git_fixture_repo!("ignored-remote")

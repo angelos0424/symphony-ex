@@ -98,8 +98,9 @@ CMD ["bin/symphony_ex", "start"]
 
 > [!IMPORTANT]
 > `SOURCE_REPO_PATH` is still supported, but new installs can usually set just `SOURCE_REPO_URL`.
-> If `SOURCE_REPO_PATH` is omitted, SymphonyEx clones or refreshes the repo under
-> `SOURCE_CACHE_ROOT/<repo-name>` and uses that local clone for `git worktree add/remove`.
+> If `SOURCE_REPO_PATH` is omitted, SymphonyEx resolves a cache location under
+> `SOURCE_CACHE_ROOT` during config load, then clones or refreshes that repo before workspace use.
+> GitHub URL normalization is intentionally limited to standard `github.com` SSH/HTTPS repo forms.
 
 ```yaml
 version: "3.8"

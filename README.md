@@ -122,9 +122,13 @@ Runtime precedence is:
 3. startup error if neither is provided
 
 When `SOURCE_REPO_URL` is used, SymphonyEx resolves a local cache path under `SOURCE_CACHE_ROOT`
-(default `./.symphony/source-cache`), clones the repo if missing, fetches with `--all --prune` if
-present, and then uses that resolved local clone as the canonical `SOURCE_REPO_PATH` for
-`git worktree add/remove`.
+(default `./.symphony/source-cache`) during config loading, then clones or fetches that cache later
+when preparing the source repo for workspace use. The resolved local clone becomes the canonical
+`SOURCE_REPO_PATH` for `git worktree add/remove`.
+
+GitHub URL equivalence is normalized for common `github.com` HTTPS and SSH forms such as
+`https://github.com/org/repo(.git)` and `git@github.com:org/repo.git`. Other remote formats are
+matched literally after basic trimming.
 
 At startup, `SymphonyEx.Application` calls `SymphonyEx.ensure_runtime_configured/0`, which loads the workflow/env config, converts it into orchestrator options, and stores both orchestrator + workflow-store startup config in application env for supervised children.
 

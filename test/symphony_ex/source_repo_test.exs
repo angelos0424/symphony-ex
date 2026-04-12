@@ -8,25 +8,18 @@ defmodule SymphonyEx.SourceRepoTest do
     repo = Path.join(root, "source")
     File.mkdir_p!(repo)
 
-    shell = fn
-      "git", ["rev-parse", "--is-inside-work-tree"], [cd: ^repo] -> {"true\n", 0}
-      "git", ["clone", _, _], _opts -> flunk("should not clone when explicit path is set")
-      "git", ["fetch" | _], _opts -> flunk("should not fetch when explicit path is set")
-    end
-
     assert {:ok, resolved} =
              SourceRepo.resolve_workspace(
                root: Path.join(root, "worktrees"),
                source_repo_path: repo,
                source_repo_url: "https://github.com/example/project.git",
-               source_cache_root: Path.join(root, "cache"),
-               shell_fun: shell
+               source_cache_root: Path.join(root, "cache")
              )
 
     assert resolved[:source_repo_path] == repo
   end
 
-  test "bootstraps SOURCE_REPO_URL into cached clone path" do
+  test "resolve_workspace computes SOURCE_REPO_URL cache path without git side effects" do
     root = tmp_dir!("url-bootstrap")
     cache_root = Path.join(root, "cache")
     remote = git_fixture_repo!("project")
@@ -42,9 +35,26 @@ defmodule SymphonyEx.SourceRepoTest do
              Path.join(cache_root, expected_cache_dir_for(remote))
 
     assert resolved[:source_cache_root] == cache_root
+    refute File.exists?(resolved[:source_repo_path])
   end
 
-  test "fetches and validates existing cached clone" do
+  test "ensure_ready bootstraps SOURCE_REPO_URL into cached clone path" do
+    root = tmp_dir!("url-bootstrap-ready")
+    cache_root = Path.join(root, "cache")
+    remote = git_fixture_repo!("project")
+
+    {:ok, resolved} =
+      SourceRepo.resolve_workspace(
+        source_repo_url: remote,
+        source_cache_root: cache_root,
+        root: Path.join(root, "worktrees")
+      )
+
+    assert :ok = SourceRepo.ensure_ready(resolved)
+    assert File.exists?(resolved[:source_repo_path])
+  end
+
+  test "ensure_ready fetches and validates existing cached clone" do
     root = tmp_dir!("existing-cache")
     cache_root = Path.join(root, "cache")
     repo = Path.join(cache_root, "github.com__example__project")
@@ -61,7 +71,7 @@ defmodule SymphonyEx.SourceRepoTest do
         {"", 0}
 
       "git", ["remote", "set-head", "origin", "--auto"], [cd: ^repo] ->
-        {"", 0}
+        {"network down\n", 1}
 
       "git", ["symbolic-ref", "refs/remotes/origin/HEAD"], [cd: ^repo] ->
         {"refs/remotes/origin/main\n", 0}
@@ -70,18 +80,16 @@ defmodule SymphonyEx.SourceRepoTest do
         {"", 0}
     end
 
-    assert {:ok, resolved} =
-             SourceRepo.resolve_workspace(
+    assert :ok =
+             SourceRepo.ensure_ready(
+               source_repo_path: repo,
                source_repo_url: "https://github.com/example/project.git",
                source_cache_root: cache_root,
-               root: Path.join(root, "worktrees"),
                shell_fun: shell
              )
-
-    assert resolved[:source_repo_path] == repo
   end
 
-  test "normalizes equivalent GitHub remote URLs before mismatching" do
+  test "matches equivalent GitHub URLs but narrows canonicalization to github.com forms" do
     root = tmp_dir!("normalized-remote")
     cache_root = Path.join(root, "cache")
     repo = Path.join(cache_root, "github.com__exampleorg__project")
@@ -107,15 +115,13 @@ defmodule SymphonyEx.SourceRepoTest do
         {"", 0}
     end
 
-    assert {:ok, resolved} =
-             SourceRepo.resolve_workspace(
+    assert :ok =
+             SourceRepo.ensure_ready(
+               source_repo_path: repo,
                source_repo_url: "https://github.com/ExampleOrg/project",
                source_cache_root: cache_root,
-               root: Path.join(root, "worktrees"),
                shell_fun: shell
              )
-
-    assert resolved[:source_repo_path] == repo
   end
 
   test "returns clear error when neither path nor url is configured" do
@@ -142,11 +148,16 @@ defmodule SymphonyEx.SourceRepoTest do
   end
 
   defp expected_cache_dir_for(url) do
-    url
-    |> String.trim()
-    |> String.trim_trailing("/")
-    |> String.replace_suffix(".git", "")
-    |> :erlang.md5()
-    |> Base.encode16(case: :lower)
+    case String.trim(url) do
+      "" ->
+        raise "unexpected empty url"
+
+      trimmed ->
+        trimmed
+        |> String.trim_trailing("/")
+        |> String.replace_suffix(".git", "")
+        |> :erlang.md5()
+        |> Base.encode16(case: :lower)
+    end
   end
 end
