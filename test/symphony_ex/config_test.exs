@@ -60,7 +60,12 @@ defmodule SymphonyEx.ConfigTest do
             project-status: In Progress
             project-fields:
               Owner: Codex
-              ETA: 2026-04-01
+              ETA: $TARGET_ETA
+              metadata:
+                status: $TARGET_STATUS
+                attempts:
+                  - 1
+                  - 2
           retry-queued:
             issue-state: open
             project-status: Blocked
@@ -79,27 +84,38 @@ defmodule SymphonyEx.ConfigTest do
 
       path = write_workflow!(workflow)
 
-      with_env([{"GITHUB_TOKEN", "ghs_test"}], fn ->
-        config = Config.load!(path)
-        assert %Lifecycle{} = lifecycle = config[:tracker][:lifecycle]
+      with_env(
+        [
+          {"GITHUB_TOKEN", "ghs_test"},
+          {"TARGET_ETA", "2026-04-01"},
+          {"TARGET_STATUS", "Ready"}
+        ],
+        fn ->
+          config = Config.load!(path)
+          assert %Lifecycle{} = lifecycle = config[:tracker][:lifecycle]
 
-        assert Lifecycle.resolve_issue_state(lifecycle, :claimed, nil) == :open
-        assert Lifecycle.resolve_project_status(lifecycle, :claimed, nil) == "In Progress"
+          assert Lifecycle.resolve_issue_state(lifecycle, :claimed, nil) == :open
+          assert Lifecycle.resolve_project_status(lifecycle, :claimed, nil) == "In Progress"
 
-        assert Lifecycle.resolve_project_fields(lifecycle, :claimed, nil) == %{
-                 "Owner" => "Codex",
-                 "ETA" => "2026-04-01"
-               }
+          assert Lifecycle.resolve_project_fields(lifecycle, :claimed, nil) == %{
+                   "Owner" => "Codex",
+                   "ETA" => "2026-04-01",
+                   "metadata" => %{
+                     "status" => "Ready",
+                     "attempts" => [1, 2]
+                   }
+                 }
 
-        assert Lifecycle.resolve_project_status(lifecycle, :retry_queued, nil) == "Blocked"
-        assert Lifecycle.resolve_issue_state(lifecycle, :released, :success) == :closed
-        assert Lifecycle.resolve_project_status(lifecycle, :released, :success) == "Done"
-        assert Lifecycle.resolve_issue_state(lifecycle, :released, :failed) == :open
-        assert Lifecycle.resolve_project_status(lifecycle, :released, :failed) == "Todo"
+          assert Lifecycle.resolve_project_status(lifecycle, :retry_queued, nil) == "Blocked"
+          assert Lifecycle.resolve_issue_state(lifecycle, :released, :success) == :closed
+          assert Lifecycle.resolve_project_status(lifecycle, :released, :success) == "Done"
+          assert Lifecycle.resolve_issue_state(lifecycle, :released, :failed) == :open
+          assert Lifecycle.resolve_project_status(lifecycle, :released, :failed) == "Todo"
 
-        assert Lifecycle.resolve_issue_state(lifecycle, :running, nil) == :open
-        assert Lifecycle.resolve_project_status(lifecycle, :running, nil) == "In Progress"
-      end)
+          assert Lifecycle.resolve_issue_state(lifecycle, :running, nil) == :open
+          assert Lifecycle.resolve_project_status(lifecycle, :running, nil) == "In Progress"
+        end
+      )
     end
 
     test "parses tracker write-back automation config" do
