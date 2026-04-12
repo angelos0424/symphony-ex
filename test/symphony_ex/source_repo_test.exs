@@ -38,14 +38,16 @@ defmodule SymphonyEx.SourceRepoTest do
                root: Path.join(root, "worktrees")
              )
 
-    assert resolved[:source_repo_path] == Path.join(cache_root, Path.basename(remote))
+    assert resolved[:source_repo_path] ==
+             Path.join(cache_root, expected_cache_dir_for(remote))
+
     assert resolved[:source_cache_root] == cache_root
   end
 
   test "fetches and validates existing cached clone" do
     root = tmp_dir!("existing-cache")
     cache_root = Path.join(root, "cache")
-    repo = Path.join(cache_root, "project")
+    repo = Path.join(cache_root, "github.com__example__project")
     File.mkdir_p!(repo)
 
     shell = fn
@@ -57,11 +59,57 @@ defmodule SymphonyEx.SourceRepoTest do
 
       "git", ["fetch", "--all", "--prune"], [cd: ^repo] ->
         {"", 0}
+
+      "git", ["remote", "set-head", "origin", "--auto"], [cd: ^repo] ->
+        {"", 0}
+
+      "git", ["symbolic-ref", "refs/remotes/origin/HEAD"], [cd: ^repo] ->
+        {"refs/remotes/origin/main\n", 0}
+
+      "git", ["checkout", "--detach", "refs/remotes/origin/main"], [cd: ^repo] ->
+        {"", 0}
     end
 
     assert {:ok, resolved} =
              SourceRepo.resolve_workspace(
                source_repo_url: "https://github.com/example/project.git",
+               source_cache_root: cache_root,
+               root: Path.join(root, "worktrees"),
+               shell_fun: shell
+             )
+
+    assert resolved[:source_repo_path] == repo
+  end
+
+  test "normalizes equivalent GitHub remote URLs before mismatching" do
+    root = tmp_dir!("normalized-remote")
+    cache_root = Path.join(root, "cache")
+    repo = Path.join(cache_root, "github.com__exampleorg__project")
+    File.mkdir_p!(repo)
+
+    shell = fn
+      "git", ["rev-parse", "--is-inside-work-tree"], [cd: ^repo] ->
+        {"true\n", 0}
+
+      "git", ["remote", "get-url", "origin"], [cd: ^repo] ->
+        {"git@github.com:ExampleOrg/project.git\n", 0}
+
+      "git", ["fetch", "--all", "--prune"], [cd: ^repo] ->
+        {"", 0}
+
+      "git", ["remote", "set-head", "origin", "--auto"], [cd: ^repo] ->
+        {"", 0}
+
+      "git", ["symbolic-ref", "refs/remotes/origin/HEAD"], [cd: ^repo] ->
+        {"refs/remotes/origin/main\n", 0}
+
+      "git", ["checkout", "--detach", "refs/remotes/origin/main"], [cd: ^repo] ->
+        {"", 0}
+    end
+
+    assert {:ok, resolved} =
+             SourceRepo.resolve_workspace(
+               source_repo_url: "https://github.com/ExampleOrg/project",
                source_cache_root: cache_root,
                root: Path.join(root, "worktrees"),
                shell_fun: shell
@@ -91,5 +139,14 @@ defmodule SymphonyEx.SourceRepoTest do
     {_, 0} = System.cmd("git", ["add", "README.md"], cd: root)
     {_, 0} = System.cmd("git", ["commit", "-m", "init"], cd: root)
     root
+  end
+
+  defp expected_cache_dir_for(url) do
+    url
+    |> String.trim()
+    |> String.trim_trailing("/")
+    |> String.replace_suffix(".git", "")
+    |> :erlang.md5()
+    |> Base.encode16(case: :lower)
   end
 end

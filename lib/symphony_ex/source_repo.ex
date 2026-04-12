@@ -47,8 +47,8 @@ defmodule SymphonyEx.SourceRepo do
 
   defp resolve_source_repo(nil, source_repo_url, source_cache_root, shell, _cwd)
        when is_binary(source_repo_url) do
-    repo_name = repo_name_from_url(source_repo_url)
-    path = Path.join(source_cache_root, repo_name)
+    cache_dir = cache_dir_name_from_url(source_repo_url)
+    path = Path.join(source_cache_root, cache_dir)
 
     with :ok <- ensure_directory(source_cache_root, :source_cache_root),
          :ok <- ensure_repo_bootstrapped(path, source_repo_url, shell),
@@ -69,14 +69,18 @@ defmodule SymphonyEx.SourceRepo do
       File.exists?(path) ->
         with :ok <- validate_local_git_repo(path, shell),
              :ok <- validate_remote_match(path, source_repo_url, shell),
-             :ok <- git(path, ["fetch", "--all", "--prune"], shell) do
+             :ok <- git(path, ["fetch", "--all", "--prune"], shell),
+             :ok <- align_cached_repo_head(path, shell) do
           :ok
         end
 
       true ->
         case File.mkdir_p(Path.dirname(path)) do
           :ok ->
-            git(nil, ["clone", source_repo_url, path], shell)
+            with :ok <- git(nil, ["clone", source_repo_url, path], shell),
+                 :ok <- align_cached_repo_head(path, shell) do
+              :ok
+            end
 
           {:error, reason} ->
             {:error, {:source_repo_clone_parent_unwritable, Path.dirname(path), reason}}
@@ -89,7 +93,7 @@ defmodule SymphonyEx.SourceRepo do
       {output, 0} ->
         remote_url = String.trim(output)
 
-        if remote_url == source_repo_url do
+        if canonical_repo_identity(remote_url) == canonical_repo_identity(source_repo_url) do
           :ok
         else
           {:error, {:source_repo_remote_mismatch, path, remote_url, source_repo_url}}
@@ -97,6 +101,21 @@ defmodule SymphonyEx.SourceRepo do
 
       {output, code} ->
         {:error, {:git_failed, code, String.trim(output), path}}
+    end
+  end
+
+  defp align_cached_repo_head(path, shell) do
+    with :ok <- git(path, ["remote", "set-head", "origin", "--auto"], shell),
+         {:ok, base_ref} <- origin_head_ref(path, shell),
+         :ok <- git(path, ["checkout", "--detach", base_ref], shell) do
+      :ok
+    end
+  end
+
+  defp origin_head_ref(path, shell) do
+    case shell.("git", ["symbolic-ref", "refs/remotes/origin/HEAD"], cd: path) do
+      {output, 0} -> {:ok, String.trim(output)}
+      {output, code} -> {:error, {:git_failed, code, String.trim(output), path}}
     end
   end
 
@@ -141,15 +160,61 @@ defmodule SymphonyEx.SourceRepo do
     end
   end
 
-  defp repo_name_from_url(url) do
-    url
-    |> String.trim()
-    |> String.split(["/", ":"])
-    |> List.last()
-    |> String.replace_suffix(".git", "")
-    |> case do
-      "" -> raise ArgumentError, "SOURCE_REPO_URL must end with a repository name"
-      repo_name -> repo_name
+  defp cache_dir_name_from_url(url) do
+    case canonical_repo_identity(url) do
+      {:github_like, host, owner, repo} ->
+        Enum.join([host, owner, repo], "__")
+
+      {:generic, normalized} ->
+        normalized
+        |> :erlang.md5()
+        |> Base.encode16(case: :lower)
+    end
+  end
+
+  defp canonical_repo_identity(url) do
+    trimmed = String.trim(url)
+
+    with {:ok, parsed} <- parse_github_like_url(trimmed) do
+      parsed
+    else
+      _ -> {:generic, trimmed |> String.trim_trailing("/") |> String.replace_suffix(".git", "")}
+    end
+  end
+
+  defp parse_github_like_url(url) do
+    cond do
+      String.match?(url, ~r/^[^@\s]+@[^:]+:.+$/) ->
+        [user_host, repo_path] = String.split(url, ":", parts: 2)
+        [_user, host] = String.split(user_host, "@", parts: 2)
+        github_like_identity(host, repo_path)
+
+      true ->
+        case URI.parse(url) do
+          %URI{host: host, path: path} when is_binary(host) and is_binary(path) ->
+            github_like_identity(host, path)
+
+          _ ->
+            :error
+        end
+    end
+  end
+
+  defp github_like_identity(host, repo_path) do
+    segments =
+      repo_path
+      |> String.trim_leading("/")
+      |> String.trim_trailing("/")
+      |> String.replace_suffix(".git", "")
+      |> String.split("/", trim: true)
+
+    case segments do
+      [owner, repo] when owner != "" and repo != "" ->
+        {:ok,
+         {:github_like, String.downcase(host), String.downcase(owner), String.downcase(repo)}}
+
+      _ ->
+        :error
     end
   end
 

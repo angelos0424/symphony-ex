@@ -396,7 +396,7 @@ defmodule SymphonyEx.ConfigTest do
         assert config[:workspace][:root] == Path.expand(".symphony/worktrees", File.cwd!())
 
         assert config[:workspace][:source_repo_path] ==
-                 Path.join(cache_root, Path.basename(remote))
+                 Path.join(cache_root, expected_cache_dir_for(remote))
       end)
     end
 
@@ -501,6 +501,15 @@ defmodule SymphonyEx.ConfigTest do
     "SYMPHONY_WORKFLOW_PATH",
     "WORKFLOW_PATH"
   ]
+
+  defp expected_cache_dir_for(url) do
+    url
+    |> String.trim()
+    |> String.trim_trailing("/")
+    |> String.replace_suffix(".git", "")
+    |> :erlang.md5()
+    |> Base.encode16(case: :lower)
+  end
 
   defp with_env(pairs, fun) do
     keys = Enum.uniq(@tracked_env_vars ++ Enum.map(pairs, &elem(&1, 0)))
