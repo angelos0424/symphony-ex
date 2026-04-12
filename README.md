@@ -81,7 +81,8 @@ export GITHUB_OWNER=example-org
 export GITHUB_REPO=example-repo
 export GITHUB_PROJECT_NUMBER=7
 export WORKSPACE_ROOT=$HOME/Project/worktrees
-export SOURCE_REPO_PATH=$HOME/Project/source-repo
+export SOURCE_REPO_URL=git@github.com:example-org/example-repo.git
+export SOURCE_CACHE_ROOT=$HOME/Project/source-cache
 export SYMPHONY_LOG_FORMAT=json
 export SYMPHONY_LOG_LEVEL=info
 export SYMPHONY_LOG_METADATA=issue_identifier,thread_id,turn_id,outcome_kind,gating_reason,class,conflict_keys
@@ -107,14 +108,23 @@ export GITHUB_OWNER=example-org
 export GITHUB_REPO=example-repo
 export GITHUB_PROJECT_NUMBER=7
 export WORKSPACE_ROOT=$HOME/Project/worktrees
-export SOURCE_REPO_PATH=$HOME/Project/source-repo
+export SOURCE_REPO_URL=git@github.com:example-org/example-repo.git
+# Optional advanced override, still supported and takes precedence if set.
+# export SOURCE_REPO_PATH=$HOME/Project/source-repo
 
 mix run --no-halt
 ```
 
-`SOURCE_REPO_PATH` must be a real writable Git clone, not just an empty directory. The runtime uses
-`git worktree add/remove`, so Git metadata is written both under `WORKSPACE_ROOT` and under the
-source repo's `.git/worktrees` area.
+Runtime precedence is:
+
+1. `SOURCE_REPO_PATH` if explicitly set
+2. auto-bootstrap from `SOURCE_REPO_URL`
+3. startup error if neither is provided
+
+When `SOURCE_REPO_URL` is used, SymphonyEx resolves a local cache path under `SOURCE_CACHE_ROOT`
+(default `./.symphony/source-cache`), clones the repo if missing, fetches with `--all --prune` if
+present, and then uses that resolved local clone as the canonical `SOURCE_REPO_PATH` for
+`git worktree add/remove`.
 
 At startup, `SymphonyEx.Application` calls `SymphonyEx.ensure_runtime_configured/0`, which loads the workflow/env config, converts it into orchestrator options, and stores both orchestrator + workflow-store startup config in application env for supervised children.
 

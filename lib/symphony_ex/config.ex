@@ -5,6 +5,7 @@ defmodule SymphonyEx.Config do
 
   alias SymphonyEx.Config.Schema
   alias SymphonyEx.Orchestrator.Lifecycle
+  alias SymphonyEx.SourceRepo
 
   @spec load!(String.t()) :: keyword()
   def load!(workflow_path) do
@@ -22,7 +23,7 @@ defmodule SymphonyEx.Config do
     with {:ok, content} <- File.read(workflow_path),
          {:ok, yaml} <- parse_front_matter(content),
          {:ok, validated} <- validate(yaml) do
-      {:ok, normalize_runtime_structs(validated)}
+      {:ok, validated}
     end
   end
 
@@ -47,8 +48,13 @@ defmodule SymphonyEx.Config do
       merged = deep_merge(yaml, env)
 
       case NimbleOptions.validate(merged, Schema.schema()) do
-        {:ok, validated} -> validate_tracker_requirements(validated)
-        {:error, _} = err -> err
+        {:ok, validated} ->
+          with {:ok, validated} <- validate_tracker_requirements(validated) do
+            {:ok, normalize_runtime_structs(validated)}
+          end
+
+        {:error, _} = err ->
+          err
       end
     rescue
       error in [ArgumentError] -> {:error, error}
@@ -77,7 +83,10 @@ defmodule SymphonyEx.Config do
         {:error, {:missing_tracker_keys, kind, Enum.map_join(missing_keys, ", ", &inspect/1)}}
 
       dashboard_secret_required?(opts) ->
-        {:error, ArgumentError.exception("dashboard.secret_key_base is required when dashboard.enabled is true")}
+        {:error,
+         ArgumentError.exception(
+           "dashboard.secret_key_base is required when dashboard.enabled is true"
+         )}
 
       true ->
         {:ok, opts}
@@ -200,6 +209,13 @@ defmodule SymphonyEx.Config do
     opts
     |> normalize_tracker_runtime_structs()
     |> normalize_logging_runtime_structs()
+    |> normalize_workspace_runtime_structs()
+  end
+
+  @spec normalize_workspace_runtime_structs(keyword()) :: keyword()
+  defp normalize_workspace_runtime_structs(opts) do
+    workspace_opts = Keyword.get(opts, :workspace, [])
+    Keyword.put(opts, :workspace, SourceRepo.resolve_workspace!(workspace_opts))
   end
 
   @spec normalize_tracker_runtime_structs(keyword()) :: keyword()
@@ -346,6 +362,8 @@ defmodule SymphonyEx.Config do
     []
     |> maybe_put(:root, System.get_env("WORKSPACE_ROOT"))
     |> maybe_put(:source_repo_path, System.get_env("SOURCE_REPO_PATH"))
+    |> maybe_put(:source_repo_url, System.get_env("SOURCE_REPO_URL"))
+    |> maybe_put(:source_cache_root, System.get_env("SOURCE_CACHE_ROOT"))
     |> maybe_put(:symphony_repo_path, System.get_env("SYMPHONY_REPO_PATH"))
   end
 
@@ -401,8 +419,12 @@ defmodule SymphonyEx.Config do
   @spec env_integer(String.t()) :: integer() | nil
   defp env_integer(name) do
     case System.get_env(name) do
-      nil -> nil
-      "" -> nil
+      nil ->
+        nil
+
+      "" ->
+        nil
+
       value ->
         case Integer.parse(value) do
           {integer, ""} -> integer
