@@ -1,0 +1,435 @@
+defmodule SymphonyEx.ConfigTest do
+  use ExUnit.Case, async: false
+
+  alias SymphonyEx.Config
+  alias SymphonyEx.Orchestrator.Lifecycle
+
+  describe "load!/1" do
+    test "loads GitHub tracker settings from env and workflow front matter" do
+      workflow = """
+      ---
+      tracker:
+        active-states:
+          - Todo
+          - In Progress
+      workspace:
+        root: /yaml/worktrees
+      codex:
+        command: codex app-server --stdio
+      ---
+
+      # Workflow
+      """
+
+      path = write_workflow!(workflow)
+
+      with_env(
+        [
+          {"GITHUB_TOKEN", "ghs_test"},
+          {"GITHUB_OWNER", "openai"},
+          {"GITHUB_REPO", "symphony"},
+          {"GITHUB_PROJECT_NUMBER", "7"},
+          {"WORKSPACE_ROOT", "/env/worktrees"},
+          {"SOURCE_REPO_PATH", "/repos/source"}
+        ],
+        fn ->
+          config = Config.load!(path)
+
+          assert config[:tracker][:kind] == :github
+          assert config[:tracker][:api_key] == "ghs_test"
+          assert config[:tracker][:owner] == "openai"
+          assert config[:tracker][:repo] == "symphony"
+          assert config[:tracker][:project_number] == 7
+          assert config[:tracker][:active_states] == ["Todo", "In Progress"]
+          assert config[:workspace][:root] == "/env/worktrees"
+          assert config[:workspace][:source_repo_path] == "/repos/source"
+          assert config[:codex][:command] == "codex app-server --stdio"
+        end
+      )
+    end
+
+    test "parses tracker lifecycle config into runtime lifecycle mappings" do
+      workflow = """
+      ---
+      tracker:
+        owner: openai
+        repo: symphony
+        lifecycle:
+          claimed:
+            issue-state: open
+            project-status: In Progress
+            project-fields:
+              Owner: Codex
+              ETA: 2026-04-01
+          retry-queued:
+            issue-state: open
+            project-status: Blocked
+          released:
+            success:
+              issue-state: closed
+              project-status: Done
+            failed:
+              issue-state: open
+              project-status: Todo
+      workspace:
+        root: /tmp/worktrees
+        source_repo_path: /tmp/source
+      ---
+      """
+
+      path = write_workflow!(workflow)
+
+      with_env([{"GITHUB_TOKEN", "ghs_test"}], fn ->
+        config = Config.load!(path)
+        assert %Lifecycle{} = lifecycle = config[:tracker][:lifecycle]
+
+        assert Lifecycle.resolve_issue_state(lifecycle, :claimed, nil) == :open
+        assert Lifecycle.resolve_project_status(lifecycle, :claimed, nil) == "In Progress"
+
+        assert Lifecycle.resolve_project_fields(lifecycle, :claimed, nil) == %{
+                 "Owner" => "Codex",
+                 "ETA" => "2026-04-01"
+               }
+
+        assert Lifecycle.resolve_project_status(lifecycle, :retry_queued, nil) == "Blocked"
+        assert Lifecycle.resolve_issue_state(lifecycle, :released, :success) == :closed
+        assert Lifecycle.resolve_project_status(lifecycle, :released, :success) == "Done"
+        assert Lifecycle.resolve_issue_state(lifecycle, :released, :failed) == :open
+        assert Lifecycle.resolve_project_status(lifecycle, :released, :failed) == "Todo"
+
+        assert Lifecycle.resolve_issue_state(lifecycle, :running, nil) == :open
+        assert Lifecycle.resolve_project_status(lifecycle, :running, nil) == "In Progress"
+      end)
+    end
+
+    test "parses tracker write-back automation config" do
+      workflow = """
+      ---
+      tracker:
+        owner: openai
+        repo: symphony
+        write-back:
+          labels:
+            - symphony
+          assignee-mode: replace
+          claimed:
+            labels:
+              - symphony:claimed
+            assignees:
+              - codex-bot
+          released:
+            success:
+              labels:
+                - symphony:done
+              assignees:
+                - reviewer-bot
+      workspace:
+        root: /tmp/worktrees
+        source_repo_path: /tmp/source
+      ---
+      """
+
+      path = write_workflow!(workflow)
+
+      with_env([{"GITHUB_TOKEN", "ghs_test"}], fn ->
+        config = Config.load!(path)
+        write_back = config[:tracker][:write_back]
+
+        assert write_back[:labels] == ["symphony"]
+        assert write_back[:assignee_mode] == :replace
+        assert write_back[:claimed][:labels] == ["symphony:claimed"]
+        assert write_back[:claimed][:assignees] == ["codex-bot"]
+        assert write_back[:released][:success][:labels] == ["symphony:done"]
+        assert write_back[:released][:success][:assignees] == ["reviewer-bot"]
+      end)
+    end
+
+    test "loads explicit issue identifier into orchestrator config" do
+      workflow = """
+      ---
+      tracker:
+        owner: openai
+        repo: symphony
+      workspace:
+        root: /tmp/worktrees
+        source_repo_path: /tmp/source
+      orchestrator:
+        issue-identifier: "#42"
+      ---
+      """
+
+      path = write_workflow!(workflow)
+
+      with_env([{"GITHUB_TOKEN", "ghs_test"}], fn ->
+        config = Config.load!(path)
+        assert config[:orchestrator][:issue_identifier] == "#42"
+      end)
+    end
+
+    test "env issue identifier overrides workflow orchestrator issue identifier" do
+      workflow = """
+      ---
+      tracker:
+        owner: openai
+        repo: symphony
+      workspace:
+        root: /tmp/worktrees
+        source_repo_path: /tmp/source
+      orchestrator:
+        issue-identifier: "#42"
+      ---
+      """
+
+      path = write_workflow!(workflow)
+
+      with_env(
+        [
+          {"GITHUB_TOKEN", "ghs_test"},
+          {"GITHUB_ISSUE_IDENTIFIER", "#77"}
+        ],
+        fn ->
+          config = Config.load!(path)
+          assert config[:orchestrator][:issue_identifier] == "#77"
+        end
+      )
+    end
+
+    test "supports legacy Linear env mapping when GitHub env is absent" do
+      workflow = """
+      ---
+      tracker:
+        kind: linear
+      workspace:
+        root: /tmp/worktrees
+        source_repo_path: /tmp/source
+      ---
+      """
+
+      path = write_workflow!(workflow)
+
+      with_env(
+        [
+          {"GITHUB_TOKEN", nil},
+          {"GITHUB_OWNER", nil},
+          {"GITHUB_REPO", nil},
+          {"GITHUB_PROJECT_NUMBER", nil},
+          {"LINEAR_API_KEY", "lin_test"},
+          {"TEAM_KEY", "SYM"}
+        ],
+        fn ->
+          config = Config.load!(path)
+
+          assert config[:tracker][:kind] == :linear
+          assert config[:tracker][:api_key] == "lin_test"
+          assert config[:tracker][:team_key] == "SYM"
+        end
+      )
+    end
+
+    test "prefers Linear env when workflow tracker kind is linear even if GitHub env is present" do
+      workflow = """
+      ---
+      tracker:
+        kind: linear
+      workspace:
+        root: /tmp/worktrees
+        source_repo_path: /tmp/source
+      ---
+      """
+
+      path = write_workflow!(workflow)
+
+      with_env(
+        [
+          {"GITHUB_TOKEN", "ghs_ambient"},
+          {"GITHUB_OWNER", "ambient-owner"},
+          {"GITHUB_REPO", "ambient-repo"},
+          {"LINEAR_API_KEY", "lin_test"},
+          {"TEAM_KEY", "SYM"}
+        ],
+        fn ->
+          config = Config.load!(path)
+
+          assert config[:tracker][:kind] == :linear
+          assert config[:tracker][:api_key] == "lin_test"
+          assert config[:tracker][:team_key] == "SYM"
+        end
+      )
+    end
+
+    test "loads logging config from workflow and env overrides" do
+      workflow = """
+      ---
+      tracker:
+        owner: openai
+        repo: symphony
+      workspace:
+        root: /tmp/worktrees
+        source_repo_path: /tmp/source
+      logging:
+        format: pretty
+        metadata:
+          - issue_id
+          - outcome_kind
+        redact_keys:
+          - authorization
+      ---
+      """
+
+      path = write_workflow!(workflow)
+
+      with_env(
+        [
+          {"GITHUB_TOKEN", "ghs_test"},
+          {"SYMPHONY_LOG_FORMAT", "json"},
+          {"SYMPHONY_LOG_LEVEL", "debug"},
+          {"SYMPHONY_LOG_METADATA", "issue_identifier,thread_id,recovered"},
+          {"SYMPHONY_LOG_REDACT_KEYS", "api_key,token"},
+          {"SYMPHONY_LOG_MAX_METADATA_VALUE_LENGTH", "512"}
+        ],
+        fn ->
+          config = Config.load!(path)
+
+          assert config[:logging][:format] == :json
+          assert config[:logging][:level] == :debug
+          assert config[:logging][:metadata] == [:issue_identifier, :thread_id, :recovered]
+          assert config[:logging][:redact_keys] == [:api_key, :token]
+          assert config[:logging][:max_metadata_value_length] == 512
+        end
+      )
+    end
+
+    test "requires dashboard secret_key_base when dashboard is enabled" do
+      workflow = """
+      ---
+      tracker:
+        owner: openai
+        repo: symphony
+      workspace:
+        root: /tmp/worktrees
+        source_repo_path: /tmp/source
+      dashboard:
+        enabled: true
+      ---
+      """
+
+      path = write_workflow!(workflow)
+
+      with_env([
+        {"GITHUB_TOKEN", "ghs_test"}
+      ], fn ->
+        assert {:error, error} = Config.load(path)
+        assert Exception.message(error) =~ "dashboard.secret_key_base is required"
+      end)
+    end
+
+    test "loads dashboard secret_key_base from env when dashboard is enabled" do
+      workflow = """
+      ---
+      tracker:
+        owner: openai
+        repo: symphony
+      workspace:
+        root: /tmp/worktrees
+        source_repo_path: /tmp/source
+      dashboard:
+        enabled: true
+      ---
+      """
+
+      path = write_workflow!(workflow)
+
+      with_env(
+        [
+          {"GITHUB_TOKEN", "ghs_test"},
+          {"SYMPHONY_DASHBOARD_SECRET_KEY_BASE", "test-dashboard-secret-key-base"}
+        ],
+        fn ->
+          config = Config.load!(path)
+
+          assert config[:dashboard][:enabled] == true
+          assert config[:dashboard][:secret_key_base] == "test-dashboard-secret-key-base"
+        end
+      )
+    end
+
+    test "returns a clean error for invalid integer env values" do
+      workflow = """
+      ---
+      tracker:
+        owner: openai
+        repo: symphony
+      workspace:
+        root: /tmp/worktrees
+        source_repo_path: /tmp/source
+      ---
+      """
+
+      path = write_workflow!(workflow)
+
+      with_env(
+        [
+          {"GITHUB_TOKEN", "ghs_test"},
+          {"GITHUB_PROJECT_NUMBER", "not-a-number"}
+        ],
+        fn ->
+          assert {:error, error} = Config.load(path)
+          assert Exception.message(error) =~ "invalid integer env GITHUB_PROJECT_NUMBER"
+        end
+      )
+    end
+  end
+
+  defp write_workflow!(contents) do
+    path = Path.join(System.tmp_dir!(), "workflow-#{System.unique_integer([:positive])}.md")
+    File.write!(path, contents)
+    path
+  end
+
+  @tracked_env_vars [
+    "TRACKER_KIND",
+    "GITHUB_TOKEN",
+    "GITHUB_OWNER",
+    "GITHUB_REPO",
+    "GITHUB_PROJECT_NUMBER",
+    "GITHUB_API_URL",
+    "GITHUB_GRAPHQL_URL",
+    "LINEAR_API_KEY",
+    "TEAM_KEY",
+    "WORKSPACE_ROOT",
+    "SOURCE_REPO_PATH",
+    "SYMPHONY_REPO_PATH",
+    "GITHUB_ISSUE_IDENTIFIER",
+    "ISSUE_IDENTIFIER",
+    "SYMPHONY_LOG_FORMAT",
+    "LOG_FORMAT",
+    "SYMPHONY_LOG_LEVEL",
+    "LOG_LEVEL",
+    "SYMPHONY_LOG_METADATA",
+    "SYMPHONY_LOG_REDACT_KEYS",
+    "SYMPHONY_LOG_MAX_METADATA_VALUE_LENGTH",
+    "SYMPHONY_WORKFLOW_PATH",
+    "WORKFLOW_PATH"
+  ]
+
+  defp with_env(pairs, fun) do
+    keys = Enum.uniq(@tracked_env_vars ++ Enum.map(pairs, &elem(&1, 0)))
+    original = Enum.map(keys, fn key -> {key, System.get_env(key)} end)
+
+    try do
+      Enum.each(keys, &System.delete_env/1)
+
+      Enum.each(pairs, fn
+        {key, nil} -> System.delete_env(key)
+        {key, value} -> System.put_env(key, value)
+      end)
+
+      fun.()
+    after
+      Enum.each(original, fn
+        {key, nil} -> System.delete_env(key)
+        {key, value} -> System.put_env(key, value)
+      end)
+    end
+  end
+end
