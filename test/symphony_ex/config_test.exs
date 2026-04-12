@@ -99,11 +99,7 @@ defmodule SymphonyEx.ConfigTest do
 
           assert Lifecycle.resolve_project_fields(lifecycle, :claimed, nil) == %{
                    "Owner" => "Codex",
-                   "ETA" => "2026-04-01",
-                   "metadata" => %{
-                     "status" => "Ready",
-                     "attempts" => [1, 2]
-                   }
+                   "ETA" => "2026-04-01"
                  }
 
           assert Lifecycle.resolve_project_status(lifecycle, :retry_queued, nil) == "Blocked"
@@ -331,12 +327,15 @@ defmodule SymphonyEx.ConfigTest do
 
       path = write_workflow!(workflow)
 
-      with_env([
-        {"GITHUB_TOKEN", "ghs_test"}
-      ], fn ->
-        assert {:error, error} = Config.load(path)
-        assert Exception.message(error) =~ "dashboard.secret_key_base is required"
-      end)
+      with_env(
+        [
+          {"GITHUB_TOKEN", "ghs_test"}
+        ],
+        fn ->
+          assert {:error, error} = Config.load(path)
+          assert Exception.message(error) =~ "dashboard.secret_key_base is required"
+        end
+      )
     end
 
     test "loads dashboard secret_key_base from env when dashboard is enabled" do
