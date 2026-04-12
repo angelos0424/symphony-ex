@@ -61,11 +61,8 @@ defmodule SymphonyEx.ConfigTest do
             project-fields:
               Owner: Codex
               ETA: $TARGET_ETA
-              metadata:
-                status: $TARGET_STATUS
-                attempts:
-                  - 1
-                  - 2
+              Estimate: 2
+              Ready: null
           retry-queued:
             issue-state: open
             project-status: Blocked
@@ -87,8 +84,7 @@ defmodule SymphonyEx.ConfigTest do
       with_env(
         [
           {"GITHUB_TOKEN", "ghs_test"},
-          {"TARGET_ETA", "2026-04-01"},
-          {"TARGET_STATUS", "Ready"}
+          {"TARGET_ETA", "2026-04-01"}
         ],
         fn ->
           config = Config.load!(path)
@@ -99,7 +95,9 @@ defmodule SymphonyEx.ConfigTest do
 
           assert Lifecycle.resolve_project_fields(lifecycle, :claimed, nil) == %{
                    "Owner" => "Codex",
-                   "ETA" => "2026-04-01"
+                   "ETA" => "2026-04-01",
+                   "Estimate" => 2,
+                   "Ready" => nil
                  }
 
           assert Lifecycle.resolve_project_status(lifecycle, :retry_queued, nil) == "Blocked"
@@ -112,6 +110,35 @@ defmodule SymphonyEx.ConfigTest do
           assert Lifecycle.resolve_project_status(lifecycle, :running, nil) == "In Progress"
         end
       )
+    end
+
+    test "returns an error when lifecycle project_fields contain nested values" do
+      workflow = """
+      ---
+      tracker:
+        owner: openai
+        repo: symphony
+        lifecycle:
+          claimed:
+            project-fields:
+              Owner: Codex
+              metadata:
+                status: nested
+      workspace:
+        root: /tmp/worktrees
+        source_repo_path: /tmp/source
+      ---
+      """
+
+      path = write_workflow!(workflow)
+
+      with_env([{"GITHUB_TOKEN", "ghs_test"}], fn ->
+        assert {:error, error} = Config.load(path)
+
+        assert Exception.message(error) =~ "project_fields"
+        assert Exception.message(error) =~ "string, number, or nil values"
+        assert Exception.message(error) =~ "metadata"
+      end)
     end
 
     test "parses tracker write-back automation config" do

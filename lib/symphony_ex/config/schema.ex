@@ -10,7 +10,7 @@ defmodule SymphonyEx.Config.Schema do
     keys: [
       issue_state: [type: :string],
       project_status: [type: :string],
-      project_fields: [type: :any]
+      project_fields: [type: {:custom, __MODULE__, :validate_project_fields, []}]
     ]
   ]
 
@@ -213,6 +213,34 @@ defmodule SymphonyEx.Config.Schema do
     end
 
     opts
+  end
+
+  @doc false
+  @spec validate_project_fields(term()) :: {:ok, map() | keyword()} | {:error, String.t()}
+  def validate_project_fields(value) when is_list(value) or is_map(value) do
+    if Enum.all?(value, fn
+         {_key, field_value} -> supported_project_field_value?(field_value)
+         _other -> false
+       end) do
+      {:ok, value}
+    else
+      {:error, project_fields_error(value)}
+    end
+  end
+
+  def validate_project_fields(value) do
+    {:error, project_fields_error(value)}
+  end
+
+  @spec supported_project_field_value?(term()) :: boolean()
+  defp supported_project_field_value?(value) when is_binary(value), do: true
+  defp supported_project_field_value?(value) when is_number(value), do: true
+  defp supported_project_field_value?(nil), do: true
+  defp supported_project_field_value?(_value), do: false
+
+  @spec project_fields_error(term()) :: String.t()
+  defp project_fields_error(value) do
+    "expected project_fields to be a map or keyword list containing only string, number, or nil values, got: #{inspect(value)}"
   end
 
   @spec normalize_optional_string(term()) :: String.t() | nil
