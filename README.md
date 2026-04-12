@@ -161,7 +161,7 @@ one normalized runtime payload shape.
 
 - Keep **Codex** as the agent execution backend.
 - Do not overbuild GitHub tracker automation too early; start with a minimal issue-run flow, then add Project-based selection/state sync incrementally.
-- The next major implementation step is still the actual **GitHub client/adapter**, not more Linear expansion.
+- The next major implementation focus is continued hardening of the **GitHub-backed runtime/orchestrator path**, not more Linear expansion.
 - Current orchestrator parallel-dispatch assumptions:
   - bounded parallelism is enforced via concurrency classes
   - issues can declare serialization/conflict boundaries through labels with prefixes like `scope:`, `service:`, `path:`, `package:`, `release:`

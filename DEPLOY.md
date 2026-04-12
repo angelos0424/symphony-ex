@@ -19,7 +19,7 @@
 | `GITHUB_PROJECT_NUMBER` | GitHub Project v2 번호 | (없음) |
 | `TRACKER_KIND` | 트래커 종류 (`github` / `linear`) | `github` |
 | `SYMPHONY_REPO_PATH` | Symphony 설정 저장소 경로 | (없음) |
-| `ISSUE_IDENTIFIER` | 특정 이슈만 실행 (예: `#42`) | (없음, 폴링 모드) |
+| `GITHUB_ISSUE_IDENTIFIER` (`ISSUE_IDENTIFIER` legacy alias) | 특정 이슈만 실행 (예: `#42`) | (없음, 폴링 모드) |
 
 ### Linear 트래커 (선택)
 
