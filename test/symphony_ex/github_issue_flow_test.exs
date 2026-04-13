@@ -47,6 +47,20 @@ defmodule SymphonyEx.GitHubIssueFlowTest do
 
     defp handle_request(request, state) do
       cond do
+        request.method == :get and
+            String.ends_with?(to_string(request.url), "/repos/example/repo/issues/12") ->
+          issue = %{
+            "id" => "I_12",
+            "number" => 12,
+            "title" => "Implement tracker abstraction",
+            "body" => "Service: api",
+            "html_url" => "https://github.com/example/repo/issues/12",
+            "state" => "open",
+            "labels" => []
+          }
+
+          {{:ok, %Req.Response{status: 200, body: issue}}, state}
+
         to_string(request.url) == "https://api.github.com/graphql" and
             String.contains?(request.options[:json]["query"], "query ProjectItems") ->
           {{:ok, project_items_response(state.project_status)}, state}

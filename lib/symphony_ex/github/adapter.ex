@@ -67,6 +67,10 @@ defmodule SymphonyEx.GitHub.Adapter do
         :ok ->
           {:ok, response}
 
+        {:ok, {:partial, stage, reason}} ->
+          annotate_partial_write_back(issue, attrs, stage, reason, opts)
+          {:ok, response}
+
         {:error, stage, reason} ->
           annotate_partial_write_back(issue, attrs, stage, reason, opts)
           {:error, {:partial_write_back, stage, reason}}
@@ -132,7 +136,7 @@ defmodule SymphonyEx.GitHub.Adapter do
     active_states = Keyword.get(opts, :active_states, ["In Progress", "Todo"])
     identifiers = Keyword.get(opts, :include_issue_identifiers, [])
 
-    with {:ok, items} <- Client.list_project_items(opts) do
+    with {:ok, items} <- Client.list_project_items(Keyword.put(opts, :include_issue_body, false)) do
       issues =
         items
         |> Enum.filter(&active_project_item?(&1, active_states))
@@ -218,18 +222,29 @@ defmodule SymphonyEx.GitHub.Adapter do
     Map.get(@desired_state_map, normalized, :open)
   end
 
-  @spec sync_write_back(Issue.t(), map(), keyword()) :: :ok | {:error, atom(), term()}
+  @spec sync_write_back(Issue.t(), map(), keyword()) ::
+          :ok | {:ok, {:partial, atom(), term()}} | {:error, atom(), term()}
   defp sync_write_back(%Issue{} = issue, attrs, opts) do
-    with :ok <- sync_lifecycle_state(issue, attrs, opts),
-         :ok <- sync_write_back_automation(issue, attrs, opts) do
-      :ok
+    with :ok <- sync_essential_write_back(issue, attrs, opts) do
+      case sync_optional_write_back(issue, attrs, opts) do
+        :ok -> :ok
+        {:error, stage, reason} -> {:ok, {:partial, stage, reason}}
+      end
     end
   end
 
-  @spec sync_lifecycle_state(Issue.t(), map(), keyword()) :: :ok | {:error, term()}
-  defp sync_lifecycle_state(%Issue{} = issue, attrs, opts) do
+  @spec sync_essential_write_back(Issue.t(), map(), keyword()) :: :ok | {:error, atom(), term()}
+  defp sync_essential_write_back(%Issue{} = issue, attrs, opts) do
     with :ok <- maybe_update_issue_state(issue, attrs, opts) do
-      maybe_sync_project_fields(issue, attrs, opts)
+      maybe_sync_project_status(issue, attrs, opts)
+    end
+  end
+
+  @spec sync_optional_write_back(Issue.t(), map(), keyword()) :: :ok | {:error, atom(), term()}
+  defp sync_optional_write_back(%Issue{} = issue, attrs, opts) do
+    with :ok <- maybe_sync_additional_project_fields(issue, attrs, opts),
+         :ok <- sync_write_back_automation(issue, attrs, opts) do
+      :ok
     end
   end
 
@@ -247,9 +262,30 @@ defmodule SymphonyEx.GitHub.Adapter do
     end
   end
 
-  @spec maybe_sync_project_fields(Issue.t(), map(), keyword()) :: :ok | {:error, atom(), term()}
-  defp maybe_sync_project_fields(%Issue{} = issue, attrs, opts) do
-    desired_fields = lifecycle_project_fields(attrs, opts)
+  @spec maybe_sync_project_status(Issue.t(), map(), keyword()) :: :ok | {:error, atom(), term()}
+  defp maybe_sync_project_status(%Issue{} = issue, attrs, opts) do
+    desired_status = lifecycle_project_state_name(attrs, opts)
+
+    if is_nil(desired_status) do
+      :ok
+    else
+      case fetch_project_item(issue, opts) do
+        {:ok, item} ->
+          sync_project_field(item, "Status", desired_status, opts)
+
+        {:error, {:project_item_not_found, _identifier}} ->
+          :ok
+
+        {:error, reason} ->
+          {:error, :project_item_lookup_failed, reason}
+      end
+    end
+  end
+
+  @spec maybe_sync_additional_project_fields(Issue.t(), map(), keyword()) ::
+          :ok | {:error, atom(), term()}
+  defp maybe_sync_additional_project_fields(%Issue{} = issue, attrs, opts) do
+    desired_fields = lifecycle_additional_project_fields(attrs, opts)
 
     if map_size(desired_fields) == 0 do
       :ok
@@ -730,6 +766,13 @@ defmodule SymphonyEx.GitHub.Adapter do
     |> Map.put_new_lazy("Status", fn -> lifecycle_project_state_name(attrs, opts) end)
     |> Enum.reject(fn {_key, value} -> is_nil(value) end)
     |> Map.new()
+  end
+
+  @spec lifecycle_additional_project_fields(map(), keyword()) :: map()
+  defp lifecycle_additional_project_fields(attrs, opts) do
+    attrs
+    |> lifecycle_project_fields(opts)
+    |> Map.delete("Status")
   end
 
   @spec todo_project_state_name(keyword(), String.t() | nil) :: String.t() | nil

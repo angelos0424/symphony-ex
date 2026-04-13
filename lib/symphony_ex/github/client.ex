@@ -132,8 +132,45 @@ defmodule SymphonyEx.GitHub.Client do
   def list_project_items(opts) do
     owner = Keyword.fetch!(opts, :owner)
     project_number = Keyword.fetch!(opts, :project_number)
+    include_issue_body = Keyword.get(opts, :include_issue_body, true)
 
-    query = """
+    query = project_items_query(include_issue_body)
+
+    variables = %{"owner" => owner, "number" => project_number}
+
+    with {:ok, data} <- graphql(query, variables, opts),
+         {:ok, project} <- extract_project(data, owner) do
+      project_fields =
+        project
+        |> get_in(["fields", "nodes"])
+        |> List.wrap()
+
+      items =
+        project
+        |> get_in(["items", "nodes"])
+        |> List.wrap()
+        |> Enum.map(fn item ->
+          item
+          |> Map.put("projectId", project["id"])
+          |> Map.put("projectFields", project_fields)
+        end)
+
+      {:ok, items}
+    end
+  end
+
+  @spec project_items_query(boolean()) :: String.t()
+  defp project_items_query(include_issue_body) do
+    issue_body_field =
+      if include_issue_body do
+        """
+                  body
+        """
+      else
+        ""
+      end
+
+    """
     query ProjectItems($owner: String!, $number: Int!) {
       organization(login: $owner) {
         projectV2(number: $number) {
@@ -241,8 +278,7 @@ defmodule SymphonyEx.GitHub.Client do
                   number
                   title
                   state
-                  body
-                  url
+    #{issue_body_field}              url
                 }
               }
             }
@@ -355,8 +391,7 @@ defmodule SymphonyEx.GitHub.Client do
                   number
                   title
                   state
-                  body
-                  url
+    #{issue_body_field}              url
                 }
               }
             }
@@ -365,28 +400,6 @@ defmodule SymphonyEx.GitHub.Client do
       }
     }
     """
-
-    variables = %{"owner" => owner, "number" => project_number}
-
-    with {:ok, data} <- graphql(query, variables, opts),
-         {:ok, project} <- extract_project(data, owner) do
-      project_fields =
-        project
-        |> get_in(["fields", "nodes"])
-        |> List.wrap()
-
-      items =
-        project
-        |> get_in(["items", "nodes"])
-        |> List.wrap()
-        |> Enum.map(fn item ->
-          item
-          |> Map.put("projectId", project["id"])
-          |> Map.put("projectFields", project_fields)
-        end)
-
-      {:ok, items}
-    end
   end
 
   @spec update_project_status(String.t(), String.t(), String.t(), String.t(), keyword()) ::

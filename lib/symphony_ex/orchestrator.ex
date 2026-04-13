@@ -356,10 +356,31 @@ defmodule SymphonyEx.Orchestrator do
 
   @spec reduce_candidate_dispatch(Issue.t(), state()) :: {:cont, state()} | {:halt, state()}
   defp reduce_candidate_dispatch(issue, acc) do
-    case dispatch_candidate(acc, issue, 0, :candidate) do
-      {:ok, updated_state} -> {:cont, updated_state}
-      {:skip, updated_state, _reason} -> {:cont, updated_state}
-      {:halt, updated_state} -> {:halt, updated_state}
+    case hydrate_candidate_issue(acc, issue) do
+      {:ok, hydrated_issue} ->
+        case dispatch_candidate(acc, hydrated_issue, 0, :candidate) do
+          {:ok, updated_state} -> {:cont, updated_state}
+          {:skip, updated_state, _reason} -> {:cont, updated_state}
+          {:halt, updated_state} -> {:halt, updated_state}
+        end
+
+      {:skip, reason} ->
+        log_gated_issue(acc, issue, reason, classify_issue(issue))
+        {:cont, acc}
+    end
+  end
+
+  @spec hydrate_candidate_issue(state(), Issue.t()) :: {:ok, Issue.t()} | {:skip, atom()}
+  defp hydrate_candidate_issue(%{tracker: tracker}, %Issue{} = issue)
+       when tracker != SymphonyEx.GitHub.Adapter do
+    {:ok, issue}
+  end
+
+  defp hydrate_candidate_issue(state, %Issue{} = issue) do
+    case state.tracker.fetch_issue_by_identifier(issue.identifier, state.tracker_opts) do
+      {:ok, %Issue{} = hydrated_issue} -> {:ok, hydrated_issue}
+      {:ok, nil} -> {:skip, :issue_not_found}
+      {:error, _reason} -> {:skip, :issue_fetch_failed}
     end
   end
 

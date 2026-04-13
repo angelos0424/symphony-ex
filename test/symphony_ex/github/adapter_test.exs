@@ -746,7 +746,7 @@ defmodule SymphonyEx.GitHub.AdapterTest do
              Adapter.write_run_record(issue, %{status: :running, attempt: 1}, opts)
 
     assert body =~ "status: running"
-    requests = collect_requests(7)
+    requests = collect_requests(8)
 
     assert Enum.any?(requests, fn request ->
              request.options[:json]["variables"]["optionId"] == "opt_progress"
@@ -875,7 +875,7 @@ defmodule SymphonyEx.GitHub.AdapterTest do
              Adapter.write_run_record(issue, %{status: :running, attempt: 1}, opts)
 
     assert body =~ "status: running"
-    requests = collect_requests(4)
+    requests = collect_requests(5)
 
     project_updates =
       Enum.filter(requests, fn request ->
