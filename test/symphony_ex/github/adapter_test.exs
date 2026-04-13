@@ -1068,6 +1068,103 @@ defmodule SymphonyEx.GitHub.AdapterTest do
     end
   end
 
+  test "write_run_record annotates partial write-back when project status sync fails" do
+    issue = %Issue{
+      id: "I_kwDOA1",
+      identifier: "12",
+      title: "Title",
+      description: "Original",
+      state: "Todo"
+    }
+
+    parent = self()
+
+    request_fun = fn request ->
+      send(parent, {:github_request, request})
+
+      cond do
+        request.method == :patch and
+            String.ends_with?(to_string(request.url), "/repos/example/repo/issues/12") ->
+          {:ok, %Req.Response{status: 200, body: %{"body" => request.options[:json][:body]}}}
+
+        to_string(request.url) == "https://api.github.com/graphql" and
+            String.contains?(request.options[:json]["query"], "query ProjectItems") ->
+          {:ok,
+           %Req.Response{
+             status: 200,
+             body: %{
+               "data" => %{
+                 "organization" => %{
+                   "projectV2" => %{
+                     "id" => "PVT_x",
+                     "items" => %{
+                       "nodes" => [
+                         %{
+                           "id" => "PVTI_x",
+                           "content" => %{"number" => 12},
+                           "fieldValues" => %{
+                             "nodes" => [
+                               %{
+                                 "name" => "Todo",
+                                 "field" => %{
+                                   "id" => "status-field",
+                                   "name" => "Status",
+                                   "options" => [
+                                     %{"id" => "opt_progress", "name" => "In Progress"}
+                                   ]
+                                 }
+                               }
+                             ]
+                           }
+                         }
+                       ]
+                     }
+                   }
+                 },
+                 "user" => nil
+               }
+             }
+           }}
+
+        to_string(request.url) == "https://api.github.com/graphql" and
+            String.contains?(request.options[:json]["query"], "mutation UpdateProject") ->
+          {:error, :project_status_down}
+
+        true ->
+          flunk("unexpected request: #{inspect(request.method)} #{inspect(request.url)}")
+      end
+    end
+
+    opts = [
+      api_key: "gh-token",
+      owner: "example",
+      repo: "repo",
+      project_number: 7,
+      active_states: ["In Progress", "Todo"],
+      terminal_states: ["Done"],
+      write_back: [in_progress_state_names: ["In Progress"]],
+      request_fun: request_fun
+    ]
+
+    assert {:error, {:partial_write_back, :project_status_failed, :project_status_down}} =
+             Adapter.write_run_record(issue, %{status: :running, attempt: 1}, opts)
+
+    requests = collect_requests(4)
+
+    patch_bodies =
+      requests
+      |> Enum.filter(fn request ->
+        request.method == :patch and is_binary(request.options[:json][:body])
+      end)
+      |> Enum.map(& &1.options[:json][:body])
+
+    assert Enum.count(patch_bodies) == 2
+    assert Enum.at(patch_bodies, 0) =~ "status: running"
+    assert Enum.at(patch_bodies, 1) =~ "partial_write_back: true"
+    assert Enum.at(patch_bodies, 1) =~ "partial_write_back_stage: project_status_failed"
+    assert Enum.at(patch_bodies, 1) =~ "partial_write_back_reason: :project_status_down"
+  end
+
   defp collect_requests(count, acc \\ [])
   defp collect_requests(0, acc), do: Enum.reverse(acc)
 

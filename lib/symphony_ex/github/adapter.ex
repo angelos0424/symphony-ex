@@ -62,10 +62,15 @@ defmodule SymphonyEx.GitHub.Adapter do
     body = render_run_record(issue, attrs)
     description = upsert_managed_working_record(issue.description || "", body)
 
-    with {:ok, response} <- update_issue_description(issue.identifier, description, opts),
-         :ok <- sync_lifecycle_state(issue, attrs, opts),
-         :ok <- sync_write_back_automation(issue, attrs, opts) do
-      {:ok, response}
+    with {:ok, response} <- update_issue_description(issue.identifier, description, opts) do
+      case sync_write_back(issue, attrs, opts) do
+        :ok ->
+          {:ok, response}
+
+        {:error, stage, reason} ->
+          annotate_partial_write_back(issue, attrs, stage, reason, opts)
+          {:error, {:partial_write_back, stage, reason}}
+      end
     end
   end
 
@@ -213,6 +218,14 @@ defmodule SymphonyEx.GitHub.Adapter do
     Map.get(@desired_state_map, normalized, :open)
   end
 
+  @spec sync_write_back(Issue.t(), map(), keyword()) :: :ok | {:error, atom(), term()}
+  defp sync_write_back(%Issue{} = issue, attrs, opts) do
+    with :ok <- sync_lifecycle_state(issue, attrs, opts),
+         :ok <- sync_write_back_automation(issue, attrs, opts) do
+      :ok
+    end
+  end
+
   @spec sync_lifecycle_state(Issue.t(), map(), keyword()) :: :ok | {:error, term()}
   defp sync_lifecycle_state(%Issue{} = issue, attrs, opts) do
     with :ok <- maybe_update_issue_state(issue, attrs, opts) do
@@ -229,12 +242,12 @@ defmodule SymphonyEx.GitHub.Adapter do
     else
       case update_issue_state(issue, desired_state, opts) do
         {:ok, _response} -> :ok
-        {:error, reason} -> {:error, reason}
+        {:error, reason} -> {:error, :issue_state_failed, reason}
       end
     end
   end
 
-  @spec maybe_sync_project_fields(Issue.t(), map(), keyword()) :: :ok | {:error, term()}
+  @spec maybe_sync_project_fields(Issue.t(), map(), keyword()) :: :ok | {:error, atom(), term()}
   defp maybe_sync_project_fields(%Issue{} = issue, attrs, opts) do
     desired_fields = lifecycle_project_fields(attrs, opts)
 
@@ -249,23 +262,23 @@ defmodule SymphonyEx.GitHub.Adapter do
           :ok
 
         {:error, reason} ->
-          {:error, reason}
+          {:error, :project_item_lookup_failed, reason}
       end
     end
   end
 
-  @spec sync_all_project_fields(map(), map(), keyword()) :: :ok | {:error, term()}
+  @spec sync_all_project_fields(map(), map(), keyword()) :: :ok | {:error, atom(), term()}
   defp sync_all_project_fields(item, desired_fields, opts) do
     desired_fields
     |> Enum.reduce_while(:ok, fn {field_name, desired_value}, _acc ->
       case sync_project_field(item, field_name, desired_value, opts) do
         :ok -> {:cont, :ok}
-        {:error, reason} -> {:halt, {:error, reason}}
+        {:error, stage, reason} -> {:halt, {:error, stage, reason}}
       end
     end)
   end
 
-  @spec sync_project_field(map(), String.t(), term(), keyword()) :: :ok | {:error, term()}
+  @spec sync_project_field(map(), String.t(), term(), keyword()) :: :ok | {:error, atom(), term()}
   defp sync_project_field(item, field_name, desired_value, opts) do
     with {:ok, field_definition} <- resolve_project_field(item, field_name),
          false <- project_field_value_matches?(item, field_definition, desired_value),
@@ -276,8 +289,8 @@ defmodule SymphonyEx.GitHub.Adapter do
              item["id"],
              field_definition["id"],
              payload,
-             opts
-           ) do
+           opts
+         ) do
       :ok
     else
       true -> :ok
@@ -285,11 +298,11 @@ defmodule SymphonyEx.GitHub.Adapter do
       {:error, {:project_field_option_not_found, _field_name, _desired_value}} -> :ok
       {:error, {:project_field_iteration_not_found, _field_name, _desired_value}} -> :ok
       {:error, {:unsupported_project_field_type, _field_name}} -> :ok
-      {:error, reason} -> {:error, reason}
+      {:error, reason} -> {:error, project_field_failure_stage(field_name), reason}
     end
   end
 
-  @spec sync_write_back_automation(Issue.t(), map(), keyword()) :: :ok | {:error, term()}
+  @spec sync_write_back_automation(Issue.t(), map(), keyword()) :: :ok | {:error, atom(), term()}
   defp sync_write_back_automation(%Issue{} = issue, attrs, opts) do
     with :ok <- maybe_cleanup_managed_labels(issue, attrs, opts),
          :ok <- maybe_add_lifecycle_labels(issue, attrs, opts) do
@@ -297,7 +310,7 @@ defmodule SymphonyEx.GitHub.Adapter do
     end
   end
 
-  @spec maybe_cleanup_managed_labels(Issue.t(), map(), keyword()) :: :ok | {:error, term()}
+  @spec maybe_cleanup_managed_labels(Issue.t(), map(), keyword()) :: :ok | {:error, atom(), term()}
   defp maybe_cleanup_managed_labels(%Issue{} = issue, attrs, opts) do
     existing_labels = MapSet.new(Enum.map(issue.labels, &normalize_value/1))
     desired_labels = MapSet.new(Enum.map(write_back_labels(attrs, opts), &normalize_value/1))
@@ -315,12 +328,12 @@ defmodule SymphonyEx.GitHub.Adapter do
     Enum.reduce_while(labels_to_remove, :ok, fn label, _acc ->
       case Client.remove_label(issue.identifier, label, opts) do
         {:ok, _response} -> {:cont, :ok}
-        {:error, reason} -> {:halt, {:error, reason}}
+        {:error, reason} -> {:halt, {:error, :label_cleanup_failed, reason}}
       end
     end)
   end
 
-  @spec maybe_add_lifecycle_labels(Issue.t(), map(), keyword()) :: :ok | {:error, term()}
+  @spec maybe_add_lifecycle_labels(Issue.t(), map(), keyword()) :: :ok | {:error, atom(), term()}
   defp maybe_add_lifecycle_labels(%Issue{} = issue, attrs, opts) do
     issue_labels = issue.labels |> Enum.map(&normalize_value/1) |> MapSet.new()
 
@@ -336,12 +349,13 @@ defmodule SymphonyEx.GitHub.Adapter do
       labels ->
         case Client.add_labels(issue.identifier, labels, opts) do
           {:ok, _response} -> :ok
-          {:error, reason} -> {:error, reason}
+          {:error, reason} -> {:error, :label_sync_failed, reason}
         end
     end
   end
 
-  @spec maybe_assign_lifecycle_assignees(Issue.t(), map(), keyword()) :: :ok | {:error, term()}
+  @spec maybe_assign_lifecycle_assignees(Issue.t(), map(), keyword()) ::
+          :ok | {:error, atom(), term()}
   defp maybe_assign_lifecycle_assignees(%Issue{} = issue, attrs, opts) do
     current_assignees = issue.assignees |> Enum.map(&normalize_value/1) |> MapSet.new()
 
@@ -358,10 +372,29 @@ defmodule SymphonyEx.GitHub.Adapter do
     else
       case Client.assign_issue(issue.identifier, desired_assignees, opts) do
         {:ok, _response} -> :ok
-        {:error, reason} -> {:error, reason}
+        {:error, reason} -> {:error, :assignee_sync_failed, reason}
       end
     end
   end
+
+  @spec annotate_partial_write_back(Issue.t(), map(), atom(), term(), keyword()) :: :ok
+  defp annotate_partial_write_back(%Issue{} = issue, attrs, stage, reason, opts) do
+    partial_attrs =
+      attrs
+      |> Map.new()
+      |> Map.put(:partial_write_back, true)
+      |> Map.put(:partial_write_back_stage, stage)
+      |> Map.put(:partial_write_back_reason, inspect(reason))
+
+    partial_body = render_run_record(issue, partial_attrs)
+    partial_description = upsert_managed_working_record(issue.description || "", partial_body)
+    _ = update_issue_description(issue.identifier, partial_description, opts)
+    :ok
+  end
+
+  @spec project_field_failure_stage(String.t()) :: atom()
+  defp project_field_failure_stage("Status"), do: :project_status_failed
+  defp project_field_failure_stage(_field_name), do: :project_field_sync_failed
 
   @spec write_back_labels(map(), keyword()) :: [String.t()]
   defp write_back_labels(attrs, opts) do

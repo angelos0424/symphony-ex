@@ -77,6 +77,49 @@ defmodule SymphonyEx.AgentRunnerTest do
     def shutdown(server), do: Agent.stop(server, :normal, 1_000)
   end
 
+  defmodule SilentAppServer do
+    use Agent
+
+    def start_link(opts), do: Agent.start_link(fn -> %{opts: opts, cancelled: false} end)
+    def subscribe(_server, _pid \\ self()), do: :ok
+
+    def initialize(_server) do
+      {:ok, %{"supportsThreadReuse" => true, "supportsEvents" => true}}
+    end
+
+    def capabilities(_server), do: %{supports_thread_reuse: true, supports_events: true}
+    def start_thread(_server, _params), do: {:ok, %{"threadId" => "thread-silent"}}
+    def start_turn(_server, _params), do: {:ok, %{"turnId" => "turn-silent"}}
+    def get_events(_server), do: []
+    def alive?(_server), do: true
+    def cancel_turn(server), do: Agent.update(server, &Map.put(&1, :cancelled, true))
+    def shutdown(server), do: Agent.stop(server, :normal, 1_000)
+  end
+
+  defmodule ExitingAppServer do
+    use Agent
+
+    def start_link(opts), do: Agent.start_link(fn -> %{opts: opts, alive: true} end)
+    def subscribe(_server, _pid \\ self()), do: :ok
+
+    def initialize(_server) do
+      {:ok, %{"supportsThreadReuse" => true, "supportsEvents" => true}}
+    end
+
+    def capabilities(_server), do: %{supports_thread_reuse: true, supports_events: true}
+    def start_thread(_server, _params), do: {:ok, %{"threadId" => "thread-exit"}}
+
+    def start_turn(server, _params) do
+      Agent.update(server, &Map.put(&1, :alive, false))
+      {:ok, %{"turnId" => "turn-exit"}}
+    end
+
+    def get_events(_server), do: []
+    def alive?(server), do: Agent.get(server, & &1.alive)
+    def cancel_turn(_server), do: :ok
+    def shutdown(server), do: Agent.stop(server, :normal, 1_000)
+  end
+
   test "reuses recoverable thread metadata and clears session file on success" do
     workspace_path = tmp_workspace("recovery-success")
     workflow_path = write_workflow(workspace_path)
@@ -146,6 +189,96 @@ defmodule SymphonyEx.AgentRunnerTest do
     assert session.last_event == "startup_failed"
     assert session.error =~ ":boom"
     assert session.error_category == "startup_failed"
+  end
+
+  test "marks turn timeout failures with terminal breadcrumbs" do
+    workspace_path = tmp_workspace("turn-timeout")
+    workflow_path = write_workflow(workspace_path)
+    issue = issue_fixture("SYM-303")
+
+    result =
+      AgentRunner.run(issue,
+        workspace_path: workspace_path,
+        workflow_path: workflow_path,
+        codex: [command: "mock-codex", turn_timeout_ms: 10, stall_timeout_ms: 1_000],
+        app_server: SilentAppServer
+      )
+
+    assert result.status == :failed
+    assert result.error_category == "turn_timeout"
+    assert result.error == "Turn timeout exceeded"
+
+    assert {:ok, session} = SessionStore.load(workspace_path)
+    assert session.phase == :failed
+    assert session.error_category == "turn_timeout"
+
+    [run_finished | _] =
+      workspace_path
+      |> read_events!()
+      |> Enum.filter(&(&1["event"] == "run_finished"))
+
+    assert run_finished["error_category"] == "turn_timeout"
+    assert run_finished["status"] == "failed"
+  end
+
+  test "marks stall timeout failures with terminal breadcrumbs" do
+    workspace_path = tmp_workspace("stall-timeout")
+    workflow_path = write_workflow(workspace_path)
+    issue = issue_fixture("SYM-304")
+
+    result =
+      AgentRunner.run(issue,
+        workspace_path: workspace_path,
+        workflow_path: workflow_path,
+        codex: [command: "mock-codex", turn_timeout_ms: 1_000, stall_timeout_ms: 10],
+        app_server: SilentAppServer
+      )
+
+    assert result.status == :failed
+    assert result.error_category == "stalled"
+    assert result.error == "Stall timeout — no activity"
+
+    assert {:ok, session} = SessionStore.load(workspace_path)
+    assert session.phase == :failed
+    assert session.error_category == "stalled"
+
+    [run_finished | _] =
+      workspace_path
+      |> read_events!()
+      |> Enum.filter(&(&1["event"] == "run_finished"))
+
+    assert run_finished["error_category"] == "stalled"
+    assert run_finished["status"] == "failed"
+  end
+
+  test "marks process exit failures with terminal breadcrumbs" do
+    workspace_path = tmp_workspace("process-exit")
+    workflow_path = write_workflow(workspace_path)
+    issue = issue_fixture("SYM-305")
+
+    result =
+      AgentRunner.run(issue,
+        workspace_path: workspace_path,
+        workflow_path: workflow_path,
+        codex: [command: "mock-codex", turn_timeout_ms: 1_000, stall_timeout_ms: 1_000],
+        app_server: ExitingAppServer
+      )
+
+    assert result.status == :failed
+    assert result.error_category == "process_exit"
+    assert result.error == "Codex process exited"
+
+    assert {:ok, session} = SessionStore.load(workspace_path)
+    assert session.phase == :failed
+    assert session.error_category == "process_exit"
+
+    [run_finished | _] =
+      workspace_path
+      |> read_events!()
+      |> Enum.filter(&(&1["event"] == "run_finished"))
+
+    assert run_finished["error_category"] == "process_exit"
+    assert run_finished["status"] == "failed"
   end
 
   defp issue_fixture(identifier) do
