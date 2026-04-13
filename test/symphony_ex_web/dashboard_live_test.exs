@@ -56,13 +56,6 @@ defmodule SymphonyExWeb.DashboardLiveTest do
   setup do
     Observability.record_rate_limit(:github, %{remaining: 4321, limit: 5000, reset: "1775174400"})
 
-    Observability.record_rate_limit(:linear, %{
-      remaining: 87,
-      limit: 1000,
-      reset: "1775178000",
-      retry_after: 60
-    })
-
     now_mono_ms = System.monotonic_time(:millisecond)
     completed_workspace = temp_workspace("dashboard-live-completed")
 
@@ -223,8 +216,6 @@ defmodule SymphonyExWeb.DashboardLiveTest do
     assert html =~ "Avg runtime"
     assert html =~ "GitHub rate limit"
     assert html =~ "4321/5000"
-    assert html =~ "Linear rate limit"
-    assert html =~ "87/1000"
     assert html =~ "Orchestrator settings"
     assert html =~ "SYM-1"
     assert html =~ "SYM-2"

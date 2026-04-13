@@ -65,12 +65,7 @@ defmodule SymphonyEx.Config do
   defp validate_tracker_requirements(opts) do
     tracker = Keyword.fetch!(opts, :tracker)
     kind = Keyword.get(tracker, :kind, :github)
-
-    required_keys =
-      case kind do
-        :github -> [:api_key, :owner, :repo]
-        :linear -> [:api_key, :team_key]
-      end
+    required_keys = [:api_key, :owner, :repo]
 
     missing_keys =
       Enum.filter(required_keys, fn key ->
@@ -146,30 +141,17 @@ defmodule SymphonyEx.Config do
   @spec load_tracker_env(keyword()) :: keyword()
   defp load_tracker_env(yaml) do
     github_env = github_tracker_env()
-    linear_env = linear_tracker_env()
     explicit_kind = env_atom("TRACKER_KIND")
     yaml_kind = yaml |> Keyword.get(:tracker, []) |> Keyword.get(:kind)
 
-    resolve_tracker_env(explicit_kind, yaml_kind, github_env, linear_env)
+    resolve_tracker_env(explicit_kind, yaml_kind, github_env)
   end
 
-  @spec resolve_tracker_env(atom() | nil, atom() | nil, keyword(), keyword()) :: keyword()
-  defp resolve_tracker_env(:github, _yaml_kind, github_env, _linear_env), do: github_env
-  defp resolve_tracker_env(:linear, _yaml_kind, _github_env, linear_env), do: linear_env
-
-  defp resolve_tracker_env(_explicit, :linear, _github_env, linear_env) when linear_env != [],
-    do: linear_env
-
-  defp resolve_tracker_env(_explicit, :github, github_env, _linear_env) when github_env != [],
-    do: github_env
-
-  defp resolve_tracker_env(_explicit, _yaml_kind, github_env, _linear_env) when github_env != [],
-    do: github_env
-
-  defp resolve_tracker_env(_explicit, _yaml_kind, _github_env, linear_env) when linear_env != [],
-    do: linear_env
-
-  defp resolve_tracker_env(_explicit, _yaml_kind, _github_env, _linear_env), do: []
+  @spec resolve_tracker_env(atom() | nil, atom() | nil, keyword()) :: keyword()
+  defp resolve_tracker_env(:github, _yaml_kind, github_env), do: github_env
+  defp resolve_tracker_env(_explicit, :github, github_env) when github_env != [], do: github_env
+  defp resolve_tracker_env(_explicit, _yaml_kind, github_env) when github_env != [], do: github_env
+  defp resolve_tracker_env(_explicit, _yaml_kind, _github_env), do: []
 
   @spec github_tracker_env() :: keyword()
   defp github_tracker_env do
@@ -184,16 +166,7 @@ defmodule SymphonyEx.Config do
     |> normalize_tracker_kind(:github)
   end
 
-  @spec linear_tracker_env() :: keyword()
-  defp linear_tracker_env do
-    []
-    |> maybe_put(:kind, env_atom("TRACKER_KIND"))
-    |> maybe_put(:api_key, System.get_env("LINEAR_API_KEY"))
-    |> maybe_put(:team_key, System.get_env("TEAM_KEY"))
-    |> normalize_tracker_kind(:linear)
-  end
-
-  @spec normalize_tracker_kind(keyword(), :github | :linear) :: keyword()
+  @spec normalize_tracker_kind(keyword(), :github) :: keyword()
   defp normalize_tracker_kind(tracker_env, default_kind) do
     kind = Keyword.get(tracker_env, :kind)
 
@@ -484,7 +457,6 @@ defmodule SymphonyEx.Config do
 
   @yaml_atom_literals %{
     "github" => :github,
-    "linear" => :linear,
     "pretty" => :pretty,
     "json" => :json,
     "debug" => :debug,

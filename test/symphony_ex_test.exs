@@ -135,8 +135,6 @@ defmodule SymphonyExTest do
     "GITHUB_PROJECT_NUMBER",
     "GITHUB_API_URL",
     "GITHUB_GRAPHQL_URL",
-    "LINEAR_API_KEY",
-    "TEAM_KEY",
     "WORKSPACE_ROOT",
     "SOURCE_REPO_PATH",
     "SYMPHONY_REPO_PATH",

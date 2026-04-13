@@ -9,13 +9,6 @@ defmodule SymphonyEx.RuntimeSnapshotTest do
   test "normalizes running, retry, and completed entries for dashboard/api consumers" do
     Observability.record_rate_limit(:github, %{remaining: 4321, limit: 5000, reset: "1775174400"})
 
-    Observability.record_rate_limit(:linear, %{
-      remaining: 87,
-      limit: 1000,
-      reset: "1775178000",
-      retry_after: 60
-    })
-
     running_issue = issue_fixture("SYM-1", labels: ["bug"], assignees: ["n100"])
     retry_issue = issue_fixture("SYM-2", labels: ["docs"], conflict_hints: ["service:docs"])
     completed_issue = issue_fixture("SYM-0", labels: ["feature"])
@@ -149,13 +142,6 @@ defmodule SymphonyEx.RuntimeSnapshotTest do
                  reset_at: "2026-04-03T00:00:00Z",
                  retry_after: nil,
                  captured_at: snapshot.summary.rate_limits.github.captured_at
-               },
-               linear: %{
-                 remaining: 87,
-                 limit: 1000,
-                 reset_at: "2026-04-03T01:00:00Z",
-                 retry_after: 60,
-                 captured_at: snapshot.summary.rate_limits.linear.captured_at
                }
              }
            }

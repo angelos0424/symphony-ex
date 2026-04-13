@@ -1008,7 +1008,6 @@ defmodule SymphonyEx.Orchestrator do
   defp tracker_kind(%{tracker: tracker}) do
     case tracker do
       SymphonyEx.GitHub.Adapter -> :github
-      SymphonyEx.Linear.Adapter -> :linear
       other -> other
     end
   end

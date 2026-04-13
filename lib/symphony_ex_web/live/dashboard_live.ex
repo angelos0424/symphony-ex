@@ -1202,8 +1202,7 @@ defmodule SymphonyExWeb.DashboardLive do
       %{label: "Avg runtime", value: format_duration(summary[:average_runtime_ms])},
       %{label: "Open slots", value: summary.available_slots},
       %{label: "Max concurrent", value: summary.max_concurrent},
-      %{label: "GitHub rate limit", value: rate_limit_label(rate_limits[:github])},
-      %{label: "Linear rate limit", value: rate_limit_label(rate_limits[:linear])}
+      %{label: "GitHub rate limit", value: rate_limit_label(rate_limits[:github])}
     ]
   end
 

@@ -7,7 +7,7 @@ defmodule SymphonyEx do
   runtime options for the orchestrator.
   """
 
-  alias SymphonyEx.{Config, GitHub, Linear, Logging, Orchestrator, WorkflowStore}
+  alias SymphonyEx.{Config, GitHub, Logging, Orchestrator, WorkflowStore}
   alias SymphonyEx.Orchestrator.Lifecycle
 
   @workflow_env_vars ["SYMPHONY_WORKFLOW_PATH", "WORKFLOW_PATH"]
@@ -162,7 +162,6 @@ defmodule SymphonyEx do
 
   @spec tracker_module(atom()) :: module()
   defp tracker_module(:github), do: GitHub.Adapter
-  defp tracker_module(:linear), do: Linear.Adapter
   defp tracker_module(_other), do: GitHub.Adapter
 
   @spec present_env(String.t()) :: String.t() | nil

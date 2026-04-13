@@ -233,69 +233,6 @@ defmodule SymphonyEx.ConfigTest do
       )
     end
 
-    test "supports legacy Linear env mapping when GitHub env is absent" do
-      workflow = """
-      ---
-      tracker:
-        kind: linear
-      workspace:
-        root: /tmp/worktrees
-        source_repo_path: /tmp/source
-      ---
-      """
-
-      path = write_workflow!(workflow)
-
-      with_env(
-        [
-          {"GITHUB_TOKEN", nil},
-          {"GITHUB_OWNER", nil},
-          {"GITHUB_REPO", nil},
-          {"GITHUB_PROJECT_NUMBER", nil},
-          {"LINEAR_API_KEY", "lin_test"},
-          {"TEAM_KEY", "SYM"}
-        ],
-        fn ->
-          config = Config.load!(path)
-
-          assert config[:tracker][:kind] == :linear
-          assert config[:tracker][:api_key] == "lin_test"
-          assert config[:tracker][:team_key] == "SYM"
-        end
-      )
-    end
-
-    test "prefers Linear env when workflow tracker kind is linear even if GitHub env is present" do
-      workflow = """
-      ---
-      tracker:
-        kind: linear
-      workspace:
-        root: /tmp/worktrees
-        source_repo_path: /tmp/source
-      ---
-      """
-
-      path = write_workflow!(workflow)
-
-      with_env(
-        [
-          {"GITHUB_TOKEN", "ghs_ambient"},
-          {"GITHUB_OWNER", "ambient-owner"},
-          {"GITHUB_REPO", "ambient-repo"},
-          {"LINEAR_API_KEY", "lin_test"},
-          {"TEAM_KEY", "SYM"}
-        ],
-        fn ->
-          config = Config.load!(path)
-
-          assert config[:tracker][:kind] == :linear
-          assert config[:tracker][:api_key] == "lin_test"
-          assert config[:tracker][:team_key] == "SYM"
-        end
-      )
-    end
-
     test "loads logging config from workflow and env overrides" do
       workflow = """
       ---
@@ -530,8 +467,6 @@ defmodule SymphonyEx.ConfigTest do
     "GITHUB_PROJECT_NUMBER",
     "GITHUB_API_URL",
     "GITHUB_GRAPHQL_URL",
-    "LINEAR_API_KEY",
-    "TEAM_KEY",
     "WORKSPACE_ROOT",
     "SOURCE_REPO_PATH",
     "SOURCE_REPO_URL",

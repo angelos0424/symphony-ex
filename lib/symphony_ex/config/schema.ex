@@ -61,11 +61,10 @@ defmodule SymphonyEx.Config.Schema do
               type: :keyword_list,
               required: true,
               keys: [
-                kind: [type: {:in, [:github, :linear]}, default: :github],
+                kind: [type: {:in, [:github]}, default: :github],
                 endpoint: [type: :string, default: "https://api.github.com"],
                 graphql_endpoint: [type: :string, default: "https://api.github.com/graphql"],
                 api_key: [type: :string],
-                team_key: [type: :string],
                 owner: [type: :string],
                 repo: [type: :string],
                 project_number: [type: :pos_integer],
@@ -181,12 +180,7 @@ defmodule SymphonyEx.Config.Schema do
   defp validate_tracker_requirements!(opts) do
     tracker = Keyword.fetch!(opts, :tracker)
     kind = Keyword.get(tracker, :kind, :github)
-
-    required_keys =
-      case kind do
-        :github -> [:api_key, :owner, :repo]
-        :linear -> [:api_key, :team_key]
-      end
+    required_keys = [:api_key, :owner, :repo]
 
     missing_keys = Enum.filter(required_keys, &blank_tracker_value?(Keyword.get(tracker, &1)))
 
