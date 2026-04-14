@@ -70,6 +70,8 @@ defmodule SymphonyEx.RuntimeSnapshot do
           settings: map()
         }
 
+  @type observer_fingerprint :: integer()
+
   @spec from_orchestrator(GenServer.server()) :: snapshot()
   def from_orchestrator(server \\ Orchestrator) do
     try do
@@ -114,6 +116,14 @@ defmodule SymphonyEx.RuntimeSnapshot do
         workflow_path: state.workflow_path
       }
     }
+  end
+
+  @spec observer_fingerprint(map()) :: observer_fingerprint()
+  def observer_fingerprint(state) do
+    :erlang.phash2(
+      {:runtime_snapshot_v1, observer_running(state), observer_retry_queue(state),
+       observer_completed(state), observer_settings(state), Observability.snapshot()}
+    )
   end
 
   @spec find_run(snapshot(), String.t()) :: map() | nil
@@ -170,6 +180,89 @@ defmodule SymphonyEx.RuntimeSnapshot do
       rate_limits: Observability.snapshot()
     }
   end
+
+  defp observer_running(state) do
+    state.running
+    |> Map.values()
+    |> Enum.map(fn entry ->
+      %{
+        identifier: entry.issue.identifier,
+        state: entry.state,
+        attempt: entry.attempt,
+        workspace_path: entry.workspace_path,
+        concurrency_class: entry.concurrency_class,
+        conflict_keys: entry.conflict_keys |> MapSet.to_list() |> Enum.sort(),
+        started_at_ms: entry.started_at_ms
+      }
+    end)
+    |> Enum.sort_by(fn entry -> {entry.concurrency_class, entry.identifier} end)
+  end
+
+  defp observer_retry_queue(state) do
+    state.retry_queue
+    |> Map.values()
+    |> Enum.map(fn entry ->
+      %{
+        identifier: entry.issue.identifier,
+        attempt: entry.attempt,
+        due_at_ms: entry.due_at_ms,
+        backoff_ms: entry.backoff_ms,
+        concurrency_class: entry.concurrency_class,
+        conflict_keys: entry.conflict_keys |> MapSet.to_list() |> Enum.sort(),
+        last_result: observer_last_result(entry.last_result)
+      }
+    end)
+    |> Enum.sort_by(fn entry -> {entry.due_at_ms, entry.concurrency_class, entry.identifier} end)
+  end
+
+  defp observer_completed(state) do
+    state.completed
+    |> Enum.map(fn entry ->
+      %{
+        identifier: observer_issue_identifier(Map.get(entry, :issue)),
+        attempt: Map.get(entry, :attempt),
+        result: Map.get(entry, :result),
+        completed_at: Map.get(entry, :completed_at),
+        started_at: Map.get(entry, :started_at),
+        elapsed_ms: Map.get(entry, :elapsed_ms),
+        workspace_path: Map.get(entry, :workspace_path),
+        thread_id: Map.get(entry, :thread_id),
+        turn_id: Map.get(entry, :turn_id),
+        session_id: Map.get(entry, :session_id),
+        recovery_count: Map.get(entry, :recovery_count),
+        last_event: Map.get(entry, :last_event),
+        last_message: Map.get(entry, :last_message),
+        error: Map.get(entry, :error),
+        error_category: Map.get(entry, :error_category)
+      }
+    end)
+    |> Enum.sort_by(& &1.identifier)
+  end
+
+  defp observer_settings(state) do
+    %{
+      poll_interval_ms: state.poll_interval_ms,
+      max_concurrent: state.max_concurrent,
+      max_retries: state.max_retries,
+      retry_backoff_ms: state.retry_backoff_ms,
+      max_retry_backoff_ms: state.max_retry_backoff_ms,
+      concurrency_limits: normalize_concurrency_limits(state.concurrency_limits),
+      blocked_labels: state.blocked_labels |> MapSet.to_list() |> Enum.sort(),
+      serialization_label_prefixes: Enum.sort(state.serialization_label_prefixes),
+      explicit_issue_identifier: state.explicit_issue_identifier,
+      workflow_path: state.workflow_path
+    }
+  end
+
+  defp observer_last_result(result) when is_map(result) do
+    Map.take(result, [:status, :error, :error_category, :last_event, :last_message, :elapsed_ms])
+  end
+
+  defp observer_last_result(_other), do: nil
+
+  defp observer_issue_identifier(%Issue{identifier: identifier}), do: identifier
+  defp observer_issue_identifier(%{identifier: identifier}), do: identifier
+  defp observer_issue_identifier(_other), do: nil
 
   @spec running_entries(map()) :: [map()]
   def running_entries(state) do

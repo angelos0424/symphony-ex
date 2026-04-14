@@ -86,7 +86,8 @@ defmodule SymphonyEx.Orchestrator do
           retry_queue: %{String.t() => retry_entry()},
           retries: %{String.t() => non_neg_integer()},
           last_persisted_payloads: %{String.t() => map()},
-          deferral_counts: %{String.t() => non_neg_integer()}
+          deferral_counts: %{String.t() => non_neg_integer()},
+          last_runtime_snapshot_fingerprint: integer() | nil
         }
 
   @default_blocked_labels ["blocked", "human-blocked", "needs-human", "do-not-dispatch"]
@@ -146,7 +147,8 @@ defmodule SymphonyEx.Orchestrator do
       retry_queue: %{},
       retries: %{},
       last_persisted_payloads: %{},
-      deferral_counts: %{}
+      deferral_counts: %{},
+      last_runtime_snapshot_fingerprint: nil
     }
 
     send(self(), :tick)
@@ -672,11 +674,17 @@ defmodule SymphonyEx.Orchestrator do
 
   @spec publish_snapshot(map()) :: map()
   defp publish_snapshot(state) do
-    state
-    |> RuntimeSnapshot.from_state()
-    |> Dashboard.broadcast_snapshot()
+    fingerprint = RuntimeSnapshot.observer_fingerprint(state)
 
-    state
+    if state.last_runtime_snapshot_fingerprint == fingerprint do
+      state
+    else
+      state
+      |> RuntimeSnapshot.from_state()
+      |> Dashboard.broadcast_snapshot()
+
+      Map.put(state, :last_runtime_snapshot_fingerprint, fingerprint)
+    end
   end
 
   @spec explicit_issue_identifier(keyword(), keyword()) :: String.t() | nil

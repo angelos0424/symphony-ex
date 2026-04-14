@@ -137,6 +137,42 @@ defmodule SymphonyEx.OrchestratorTest do
     :ok
   end
 
+  test "suppresses dashboard broadcasts on no-op ticks" do
+    if Process.whereis(SymphonyEx.PubSub) == nil do
+      start_supervised!({Phoenix.PubSub, name: SymphonyEx.PubSub})
+    end
+
+    Phoenix.PubSub.subscribe(SymphonyEx.PubSub, SymphonyEx.Dashboard.topic())
+    start_supervised!({Control, test_pid: self(), candidate_batches: [[], [], []]})
+
+    orchestrator =
+      start_supervised!(
+        {Orchestrator,
+         tracker: MockTracker,
+         workspace: MockWorkspace,
+         agent_runner: MockAgentRunner,
+         tracker_opts: [],
+         workspace_opts: [],
+         workflow_path: "/tmp/WORKFLOW.md",
+         codex: [],
+         poll_interval_ms: 60_000,
+         retry_backoff_ms: 10,
+         max_retry_backoff_ms: 10,
+         max_concurrent: 1,
+         task_supervisor: SymphonyEx.TestAgentWorkers}
+      )
+
+    assert_receive {:runtime_snapshot_updated, initial_snapshot}
+    assert initial_snapshot.summary.running_count == 0
+    assert initial_snapshot.summary.completed_count == 0
+
+    refute_receive {:runtime_snapshot_updated, _}, 75
+
+    send(orchestrator, :tick)
+
+    refute_receive {:runtime_snapshot_updated, _}, 75
+  end
+
   test "before_run hook failure blocks execution before the agent starts" do
     issue = issue_fixture("SYM-HOOK-1")
 

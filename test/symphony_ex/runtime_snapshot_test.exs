@@ -227,6 +227,53 @@ defmodule SymphonyEx.RuntimeSnapshotTest do
     assert RuntimeSnapshot.run_detail(snapshot, "SYM-404") == nil
   end
 
+  test "observer fingerprint ignores no-op time passage but changes on observer-visible state" do
+    issue = issue_fixture("SYM-OBS")
+    now_mono_ms = System.monotonic_time(:millisecond)
+
+    base_state = %{
+      explicit_issue_identifier: nil,
+      completed_issue_identifiers: MapSet.new(),
+      completed: [],
+      workflow_path: "/tmp/WORKFLOW.md",
+      poll_interval_ms: 2_000,
+      max_concurrent: 1,
+      max_retries: 2,
+      retry_backoff_ms: 5_000,
+      max_retry_backoff_ms: 60_000,
+      blocked_labels: MapSet.new(["blocked"]),
+      concurrency_limits: %{code: 1, default: 1},
+      serialization_label_prefixes: ["service:"],
+      running: %{
+        issue.identifier => %{
+          issue: issue,
+          task: %Task{ref: make_ref(), pid: self(), owner: self(), mfa: {__MODULE__, :test, 0}},
+          workspace_path: "/tmp/#{issue.identifier}",
+          state: :running,
+          attempt: 1,
+          concurrency_class: :code,
+          conflict_keys: MapSet.new(["service:api"]),
+          started_at: ~U[2026-03-30 00:00:00Z],
+          started_at_ms: System.system_time(:millisecond) - 15_000,
+          started_at_mono_ms: now_mono_ms - 15_000
+        }
+      },
+      retry_queue: %{}
+    }
+
+    fingerprint = RuntimeSnapshot.observer_fingerprint(base_state)
+    assert RuntimeSnapshot.observer_fingerprint(base_state) == fingerprint
+
+    changed_state =
+      put_in(
+        base_state,
+        [:running, issue.identifier, :attempt],
+        2
+      )
+
+    refute RuntimeSnapshot.observer_fingerprint(changed_state) == fingerprint
+  end
+
   defp issue_fixture(identifier, attrs \\ []) do
     struct!(
       Issue,
