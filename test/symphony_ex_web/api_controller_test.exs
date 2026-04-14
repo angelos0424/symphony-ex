@@ -4,6 +4,7 @@ defmodule SymphonyExWeb.ApiControllerTest do
   import Plug.Test
 
   alias SymphonyEx.Domain.Issue
+  alias SymphonyEx.Observability
   alias SymphonyEx.RunEventLogger
   alias SymphonyEx.SessionStore
   alias SymphonyExWeb.Router
@@ -23,6 +24,14 @@ defmodule SymphonyExWeb.ApiControllerTest do
   end
 
   setup do
+    Observability.reset()
+    Observability.record_rate_limit(:github, %{remaining: 128, limit: 5000, reset: "1775174400"})
+    Observability.record_write_back_stage("SYM-1", :github, :essential, :success, %{status: :running})
+    Observability.record_write_back_stage("SYM-0", :github, :optional, :partial, %{
+      failed_stage: :label_sync_failed,
+      reason: "labels_down"
+    })
+
     now_mono_ms = System.monotonic_time(:millisecond)
     completed_workspace = temp_workspace("api-controller-completed")
 
@@ -138,7 +147,9 @@ defmodule SymphonyExWeb.ApiControllerTest do
     assert body["summary"]["running_count"] == 1
     assert body["summary"]["retry_queue_count"] == 1
     assert body["summary"]["completed_count"] == 1
+    assert body["summary"]["write_back_alert_count"] == 1
     assert body["settings"]["max_concurrent"] == 2
+    assert body["write_back_stages"]["alert_count"] == 1
     assert body["running_count"] == 1
   end
 
@@ -157,6 +168,7 @@ defmodule SymphonyExWeb.ApiControllerTest do
     assert body["completed"] |> hd() |> get_in(["thread_id"]) == "thread-0"
     assert body["completed"] |> hd() |> get_in(["log_excerpt", "event_count"]) == 2
     assert body["completed_issue_identifiers"] == ["SYM-0"]
+    assert Enum.map(body["write_back_stages"]["recent"], & &1["stage"]) == ["optional", "essential"]
   end
 
   test "GET /api/v1/runs/:identifier returns detailed running, retry, or completed entries" do
@@ -195,6 +207,7 @@ defmodule SymphonyExWeb.ApiControllerTest do
     assert completed_body["session_excerpt"]["data"]["phase"] == "completed"
     assert completed_body["debug_excerpt"]["files"] == ["stdout.log"]
     assert completed_body["log_timeline"]["event_count"] == 2
+    assert Enum.map(completed_body["write_back_stages"], & &1["stage"]) == ["optional"]
 
     assert completed_body["log_timeline"]["recent_events"] |> Enum.map(& &1["event"]) == [
              "run_started",

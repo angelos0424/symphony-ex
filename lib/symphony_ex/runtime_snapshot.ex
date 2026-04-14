@@ -67,7 +67,8 @@ defmodule SymphonyEx.RuntimeSnapshot do
           retry_queue: [map()],
           completed: [completed_entry()],
           completed_issue_identifiers: [String.t()],
-          settings: map()
+          settings: map(),
+          write_back_stages: map()
         }
 
   @type observer_fingerprint :: integer()
@@ -85,6 +86,7 @@ defmodule SymphonyEx.RuntimeSnapshot do
 
   @spec from_state(map()) :: snapshot()
   def from_state(state) do
+    observability = Observability.snapshot()
     running = running_entries(state)
     retry_queue = retry_entries(state)
     completed = completed_entries(state)
@@ -96,7 +98,8 @@ defmodule SymphonyEx.RuntimeSnapshot do
           retry_queue,
           completed,
           state.max_concurrent,
-          map_size(state.running)
+          map_size(state.running),
+          observability
         ),
       running: running,
       retry_queue: retry_queue,
@@ -105,6 +108,10 @@ defmodule SymphonyEx.RuntimeSnapshot do
         completed |> Enum.map(& &1.issue.identifier) |> Enum.uniq() |> Enum.sort(),
       settings: %{
         poll_interval_ms: state.poll_interval_ms,
+        candidate_poll_interval_ms:
+          Map.get(state, :candidate_poll_interval_ms, state.poll_interval_ms),
+        candidate_poll_backoff_until:
+          candidate_poll_backoff_until(Map.get(state, :next_candidate_poll_at_system_ms)),
         max_concurrent: state.max_concurrent,
         max_retries: state.max_retries,
         retry_backoff_ms: state.retry_backoff_ms,
@@ -114,7 +121,8 @@ defmodule SymphonyEx.RuntimeSnapshot do
         serialization_label_prefixes: Enum.sort(state.serialization_label_prefixes),
         explicit_issue_identifier: state.explicit_issue_identifier,
         workflow_path: state.workflow_path
-      }
+      },
+      write_back_stages: observability.write_back_stages
     }
   end
 
@@ -149,7 +157,7 @@ defmodule SymphonyEx.RuntimeSnapshot do
   def run_detail(snapshot, identifier) do
     case find_run(snapshot, identifier) do
       nil -> nil
-      run -> enrich_run(run)
+      run -> enrich_run(run, Observability.write_back_stage_events(identifier))
     end
   end
 
@@ -158,13 +166,23 @@ defmodule SymphonyEx.RuntimeSnapshot do
           [map()],
           [completed_entry()],
           non_neg_integer(),
-          non_neg_integer()
+          non_neg_integer(),
+          map()
         ) :: map()
-  defp summary_payload(running, retry_queue, completed, max_concurrent, running_count) do
+  defp summary_payload(
+         running,
+         retry_queue,
+         completed,
+         max_concurrent,
+         running_count,
+         observability
+       ) do
     success_count = Enum.count(completed, &(&1.result == :success))
     failed_count = Enum.count(completed, &(&1.result == :failed))
     cancelled_count = Enum.count(completed, &(&1.result == :cancelled))
     avg_runtime_ms = average(Enum.map(completed, & &1.elapsed_ms))
+    rate_limits = Map.get(observability, :rate_limits, %{})
+    write_back_stages = Map.get(observability, :write_back_stages, %{recent: [], alert_count: 0})
 
     %{
       running_count: length(running),
@@ -177,7 +195,8 @@ defmodule SymphonyEx.RuntimeSnapshot do
       average_runtime_ms: avg_runtime_ms,
       available_slots: max(max_concurrent - running_count, 0),
       max_concurrent: max_concurrent,
-      rate_limits: Observability.snapshot()
+      rate_limits: rate_limits,
+      write_back_alert_count: Map.get(write_back_stages, :alert_count, 0)
     }
   end
 
@@ -368,8 +387,8 @@ defmodule SymphonyEx.RuntimeSnapshot do
     }
   end
 
-  @spec enrich_run(map()) :: detailed_run()
-  defp enrich_run(run) do
+  @spec enrich_run(map(), [map()]) :: detailed_run()
+  defp enrich_run(run, write_back_stages) do
     workspace_path = Map.get(run, :workspace_path)
     paths = run_paths(workspace_path)
 
@@ -378,6 +397,7 @@ defmodule SymphonyEx.RuntimeSnapshot do
     |> Map.put(:session_excerpt, session_excerpt(workspace_path))
     |> Map.put(:debug_excerpt, debug_excerpt(paths.debug_dir))
     |> Map.put(:log_timeline, log_timeline(workspace_path))
+    |> Map.put(:write_back_stages, write_back_stages)
   end
 
   @spec normalize_concurrency_limits(map()) :: map()
@@ -576,6 +596,8 @@ defmodule SymphonyEx.RuntimeSnapshot do
 
   @spec empty_snapshot() :: snapshot()
   defp empty_snapshot do
+    observability = Observability.snapshot()
+
     %{
       summary: %{
         running_count: 0,
@@ -588,7 +610,8 @@ defmodule SymphonyEx.RuntimeSnapshot do
         average_runtime_ms: nil,
         available_slots: 0,
         max_concurrent: 0,
-        rate_limits: Observability.snapshot()
+        rate_limits: observability.rate_limits,
+        write_back_alert_count: observability.write_back_stages.alert_count
       },
       running: [],
       retry_queue: [],
@@ -596,6 +619,8 @@ defmodule SymphonyEx.RuntimeSnapshot do
       completed_issue_identifiers: [],
       settings: %{
         poll_interval_ms: 0,
+        candidate_poll_interval_ms: 0,
+        candidate_poll_backoff_until: nil,
         max_concurrent: 0,
         max_retries: 0,
         retry_backoff_ms: 0,
@@ -605,8 +630,17 @@ defmodule SymphonyEx.RuntimeSnapshot do
         serialization_label_prefixes: [],
         explicit_issue_identifier: nil,
         workflow_path: nil
-      }
+      },
+      write_back_stages: observability.write_back_stages
     }
+  end
+
+  defp candidate_poll_backoff_until(nil), do: nil
+
+  defp candidate_poll_backoff_until(next_candidate_poll_at_ms) when is_integer(next_candidate_poll_at_ms) do
+    next_candidate_poll_at_ms
+    |> DateTime.from_unix!(:millisecond)
+    |> DateTime.to_iso8601()
   end
 
   @spec class_rank(atom()) :: non_neg_integer()

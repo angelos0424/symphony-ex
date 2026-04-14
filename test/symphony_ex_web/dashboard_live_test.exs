@@ -54,7 +54,13 @@ defmodule SymphonyExWeb.DashboardLiveTest do
   end
 
   setup do
+    Observability.reset()
     Observability.record_rate_limit(:github, %{remaining: 4321, limit: 5000, reset: "1775174400"})
+    Observability.record_write_back_stage("SYM-1", :github, :essential, :success, %{status: :running})
+    Observability.record_write_back_stage("SYM-0", :github, :optional, :partial, %{
+      failed_stage: :label_sync_failed,
+      reason: "labels_down"
+    })
 
     now_mono_ms = System.monotonic_time(:millisecond)
     completed_workspace = temp_workspace("dashboard-live-completed")
@@ -214,9 +220,11 @@ defmodule SymphonyExWeb.DashboardLiveTest do
     assert html =~ "Success rate"
     assert html =~ "50.0%"
     assert html =~ "Avg runtime"
+    assert html =~ "Write-back alerts"
     assert html =~ "GitHub rate limit"
     assert html =~ "4321/5000"
     assert html =~ "Orchestrator settings"
+    assert html =~ "Recent tracker write-back"
     assert html =~ "SYM-1"
     assert html =~ "SYM-2"
     assert html =~ "SYM-0"
@@ -260,10 +268,11 @@ defmodule SymphonyExWeb.DashboardLiveTest do
     {:ok, _view, html} = live(conn, "/?status=failed&error_category=timeout")
 
     assert html =~ "SYM-3"
-    refute html =~ "SYM-0"
     refute html =~ "SYM-2"
     assert html =~ "status: failed"
     assert html =~ "error: timeout"
+    assert html =~ "stale failure"
+    refute html =~ "tool exploded"
 
     {:ok, _view, retry_html} =
       live(recycle(conn), "/?queue=retry_queue&status=failed&error_category=turn_failed")
@@ -290,6 +299,7 @@ defmodule SymphonyExWeb.DashboardLiveTest do
     assert html =~ "Close inspector"
     assert html =~ "Open full page"
     assert html =~ "Breadcrumb files"
+    assert html =~ "GitHub write-back"
     assert html =~ "Session snapshot"
     assert html =~ "Debug artifacts"
     assert html =~ "Event timeline"
@@ -306,6 +316,7 @@ defmodule SymphonyExWeb.DashboardLiveTest do
     assert html =~ "Back to dashboard"
     assert html =~ "Open split view"
     assert html =~ "Breadcrumb files"
+    assert html =~ "GitHub write-back"
     assert html =~ "Orchestrator settings"
     assert html =~ "turn.completed"
   end
@@ -319,7 +330,8 @@ defmodule SymphonyExWeb.DashboardLiveTest do
         retry_queue_count: 0,
         completed_count: 1,
         available_slots: 3,
-        max_concurrent: 3
+        max_concurrent: 3,
+        write_back_alert_count: 1
       },
       running: [],
       retry_queue: [],
@@ -359,6 +371,8 @@ defmodule SymphonyExWeb.DashboardLiveTest do
       completed_issue_identifiers: ["SYM-99"],
       settings: %{
         poll_interval_ms: 2_000,
+        candidate_poll_interval_ms: 10_000,
+        candidate_poll_backoff_until: "2026-03-30T01:05:00Z",
         max_concurrent: 3,
         max_retries: 2,
         retry_backoff_ms: 5_000,
@@ -368,6 +382,21 @@ defmodule SymphonyExWeb.DashboardLiveTest do
         serialization_label_prefixes: ["service:"],
         explicit_issue_identifier: nil,
         workflow_path: "/tmp/WORKFLOW.md"
+      },
+      write_back_stages: %{
+        recent: [
+          %{
+            issue_identifier: "SYM-99",
+            tracker_kind: "github",
+            stage: "optional",
+            outcome: "partial",
+            failed_stage: "label_sync_failed",
+            status: nil,
+            reason: "labels_down",
+            captured_at: "2026-03-30T01:00:00Z"
+          }
+        ],
+        alert_count: 1
       }
     })
 
@@ -380,6 +409,7 @@ defmodule SymphonyExWeb.DashboardLiveTest do
     assert html =~ "runtime 30.0 s"
     assert html =~ "NDJSON breadcrumb tail"
     assert html =~ "wrapped up"
+    assert html =~ "Recent tracker write-back"
   end
 
   defp issue_fixture(identifier, attrs \\ []) do

@@ -7,7 +7,13 @@ defmodule SymphonyEx.RuntimeSnapshotTest do
   alias SymphonyEx.SessionStore
 
   test "normalizes running, retry, and completed entries for dashboard/api consumers" do
+    Observability.reset()
     Observability.record_rate_limit(:github, %{remaining: 4321, limit: 5000, reset: "1775174400"})
+    Observability.record_write_back_stage("SYM-1", :github, :essential, :success, %{status: :running})
+    Observability.record_write_back_stage("SYM-0", :github, :optional, :partial, %{
+      failed_stage: :label_sync_failed,
+      reason: "labels_down"
+    })
 
     running_issue = issue_fixture("SYM-1", labels: ["bug"], assignees: ["n100"])
     retry_issue = issue_fixture("SYM-2", labels: ["docs"], conflict_hints: ["service:docs"])
@@ -135,6 +141,7 @@ defmodule SymphonyEx.RuntimeSnapshotTest do
              average_runtime_ms: 90_000.0,
              available_slots: 2,
              max_concurrent: 3,
+             write_back_alert_count: 1,
              rate_limits: %{
                github: %{
                  remaining: 4321,
@@ -148,6 +155,8 @@ defmodule SymphonyEx.RuntimeSnapshotTest do
 
     assert snapshot.settings == %{
              poll_interval_ms: 2_000,
+             candidate_poll_interval_ms: 2_000,
+             candidate_poll_backoff_until: nil,
              max_concurrent: 3,
              max_retries: 2,
              retry_backoff_ms: 5_000,
@@ -158,6 +167,9 @@ defmodule SymphonyEx.RuntimeSnapshotTest do
              explicit_issue_identifier: "SYM-9",
              workflow_path: "/tmp/WORKFLOW.md"
            }
+
+    assert Enum.map(snapshot.write_back_stages.recent, & &1.stage) == ["optional", "essential"]
+    assert snapshot.write_back_stages.alert_count == 1
 
     assert [running] = snapshot.running
     assert running.issue.identifier == "SYM-1"
@@ -216,6 +228,7 @@ defmodule SymphonyEx.RuntimeSnapshotTest do
     assert detail.debug_excerpt.exists == true
     assert detail.debug_excerpt.files == ["stderr.log"]
     assert detail.log_timeline.event_count == 3
+    assert Enum.map(detail.write_back_stages, & &1.stage) == ["optional"]
 
     assert Enum.map(detail.log_timeline.recent_events, & &1.event) == [
              "run_started",
@@ -228,6 +241,7 @@ defmodule SymphonyEx.RuntimeSnapshotTest do
   end
 
   test "observer fingerprint ignores no-op time passage but changes on observer-visible state" do
+    Observability.reset()
     issue = issue_fixture("SYM-OBS")
     now_mono_ms = System.monotonic_time(:millisecond)
 

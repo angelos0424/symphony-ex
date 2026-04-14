@@ -17,6 +17,7 @@ defmodule SymphonyExWeb.ApiController do
     json(conn, %{
       summary: snapshot.summary,
       settings: snapshot.settings,
+      write_back_stages: snapshot.write_back_stages,
       running_count: snapshot.summary.running_count,
       retry_queue_count: snapshot.summary.retry_queue_count
     })
@@ -30,7 +31,8 @@ defmodule SymphonyExWeb.ApiController do
       running: snapshot.running,
       retry_queue: snapshot.retry_queue,
       completed: snapshot.completed,
-      completed_issue_identifiers: snapshot.completed_issue_identifiers
+      completed_issue_identifiers: snapshot.completed_issue_identifiers,
+      write_back_stages: snapshot.write_back_stages
     })
   end
 

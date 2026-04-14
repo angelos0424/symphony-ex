@@ -366,6 +366,11 @@ defmodule SymphonyExWeb.DashboardLive do
               <% end %>
             </dl>
           </section>
+
+          <section style={panel_style()}>
+            <h2 style="margin-top: 0; font-size: 20px;">Recent tracker write-back</h2>
+            <.write_back_stage_list entries={@snapshot.write_back_stages.recent} empty_message="No tracker write-back activity has been recorded yet." />
+          </section>
         </div>
       <% else %>
         <div class="dashboard-content-grid">
@@ -638,6 +643,11 @@ defmodule SymphonyExWeb.DashboardLive do
                 <% end %>
               </dl>
             </section>
+
+            <section style={panel_style()}>
+              <h2 style="margin-top: 0; font-size: 20px;">Recent tracker write-back</h2>
+              <.write_back_stage_list entries={@snapshot.write_back_stages.recent} empty_message="No tracker write-back activity has been recorded yet." />
+            </section>
           </div>
         </div>
       <% end %>
@@ -771,6 +781,14 @@ defmodule SymphonyExWeb.DashboardLive do
 
         <section style={subpanel_style()}>
           <div style="display: flex; justify-content: space-between; gap: 12px; align-items: baseline; flex-wrap: wrap; margin-bottom: 8px;">
+            <div style="font-size: 14px; font-weight: 700;">GitHub write-back</div>
+            <span style="font-size: 12px; color: #6b7280;">{length(@run.write_back_stages)} stage event(s)</span>
+          </div>
+          <.write_back_stage_list entries={@run.write_back_stages} empty_message="No tracker write-back stages have been recorded for this run yet." />
+        </section>
+
+        <section style={subpanel_style()}>
+          <div style="display: flex; justify-content: space-between; gap: 12px; align-items: baseline; flex-wrap: wrap; margin-bottom: 8px;">
             <div style="font-size: 14px; font-weight: 700;">Event timeline</div>
             <span style="font-size: 12px; color: #6b7280;">last {length(@run.log_timeline.recent_events)} of {@run.log_timeline.event_count} event(s)</span>
           </div>
@@ -798,6 +816,42 @@ defmodule SymphonyExWeb.DashboardLive do
         </section>
       </div>
     </div>
+    """
+  end
+
+  attr(:entries, :list, required: true)
+  attr(:empty_message, :string, required: true)
+
+  defp write_back_stage_list(assigns) do
+    ~H"""
+    <%= if @entries == [] do %>
+      <p style="margin: 0; color: #6b7280;">{@empty_message}</p>
+    <% else %>
+      <div style="display: grid; gap: 8px;">
+        <%= for entry <- @entries do %>
+          <div style="border: 1px solid #e5e7eb; border-radius: 10px; padding: 10px; background: #fff;">
+            <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 4px;">
+              <span style={pill_style(:neutral)}>{entry.issue_identifier}</span>
+              <span style={pill_style(write_back_tone(entry.outcome))}>{entry.outcome}</span>
+              <span style={pill_style(:info)}>{entry.stage}</span>
+              <%= if present?(entry.failed_stage) do %>
+                <span style={pill_style(:retry)}>failed {entry.failed_stage}</span>
+              <% end %>
+              <span style="font-size: 12px; color: #6b7280;">{format_timestamp(entry.captured_at)}</span>
+            </div>
+            <div style="font-size: 13px; color: #374151; line-height: 1.45;">
+              <strong>{entry.tracker_kind}</strong>
+              <%= if present?(entry.status) do %>
+                · status {entry.status}
+              <% end %>
+              <%= if present?(entry.reason) do %>
+                · {entry.reason}
+              <% end %>
+            </div>
+          </div>
+        <% end %>
+      </div>
+    <% end %>
     """
   end
 
@@ -1202,6 +1256,7 @@ defmodule SymphonyExWeb.DashboardLive do
       %{label: "Avg runtime", value: format_duration(summary[:average_runtime_ms])},
       %{label: "Open slots", value: summary.available_slots},
       %{label: "Max concurrent", value: summary.max_concurrent},
+      %{label: "Write-back alerts", value: summary[:write_back_alert_count] || 0},
       %{label: "GitHub rate limit", value: rate_limit_label(rate_limits[:github])}
     ]
   end
@@ -1209,6 +1264,8 @@ defmodule SymphonyExWeb.DashboardLive do
   defp settings_rows(settings) do
     [
       {"Poll interval (ms)", settings.poll_interval_ms},
+      {"Candidate poll interval (ms)", settings[:candidate_poll_interval_ms]},
+      {"Candidate poll backoff until", settings[:candidate_poll_backoff_until] || "—"},
       {"Max concurrent", settings.max_concurrent},
       {"Max retries", settings.max_retries},
       {"Retry backoff base (ms)", settings.retry_backoff_ms},
@@ -1245,6 +1302,11 @@ defmodule SymphonyExWeb.DashboardLive do
   defp completed_tone(:success), do: :success
   defp completed_tone(:cancelled), do: :retry
   defp completed_tone(_other), do: :danger
+
+  defp write_back_tone("success"), do: :success
+  defp write_back_tone("partial"), do: :retry
+  defp write_back_tone("failed"), do: :danger
+  defp write_back_tone(_other), do: :neutral
 
   defp queue_tone(:running), do: :running
   defp queue_tone(:retry_queue), do: :retry

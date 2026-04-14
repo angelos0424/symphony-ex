@@ -17,6 +17,7 @@ defmodule SymphonyEx.OrchestratorTest do
             updates: [],
             runs: [],
             fetches: [],
+            candidate_polls: 0,
             test_pid: Keyword.fetch!(opts, :test_pid)
           }
         end,
@@ -27,8 +28,11 @@ defmodule SymphonyEx.OrchestratorTest do
     def next_candidates do
       Agent.get_and_update(__MODULE__, fn state ->
         case state.candidate_batches do
-          [batch | rest] -> {batch, %{state | candidate_batches: rest}}
-          [] -> {[], state}
+          [batch | rest] ->
+            {batch, %{state | candidate_batches: rest, candidate_polls: state.candidate_polls + 1}}
+
+          [] ->
+            {[], %{state | candidate_polls: state.candidate_polls + 1}}
         end
       end)
     end
@@ -42,6 +46,10 @@ defmodule SymphonyEx.OrchestratorTest do
 
     def fetches do
       Agent.get(__MODULE__, &Enum.reverse(&1.fetches))
+    end
+
+    def candidate_polls do
+      Agent.get(__MODULE__, & &1.candidate_polls)
     end
 
     def next_run_result(issue_identifier) do
@@ -134,7 +142,46 @@ defmodule SymphonyEx.OrchestratorTest do
 
   setup do
     start_supervised!({Task.Supervisor, name: SymphonyEx.TestAgentWorkers})
+
+    if Process.whereis(SymphonyEx.Observability) == nil do
+      start_supervised!({SymphonyEx.Observability, name: SymphonyEx.Observability})
+    end
+
+    SymphonyEx.Observability.reset()
     :ok
+  end
+
+  test "backs off candidate polling when GitHub rate limits are low" do
+    SymphonyEx.Observability.record_rate_limit(:github, %{remaining: 10, limit: 5000, reset: "1775174400"})
+
+    start_supervised!({Control, test_pid: self(), candidate_batches: [[], []]})
+
+    orchestrator =
+      start_supervised!(
+        {Orchestrator,
+         tracker: MockTracker,
+         workspace: MockWorkspace,
+         agent_runner: MockAgentRunner,
+         tracker_opts: [],
+         workspace_opts: [],
+         workflow_path: "/tmp/WORKFLOW.md",
+         codex: [],
+         poll_interval_ms: 25,
+         retry_backoff_ms: 10,
+         max_retry_backoff_ms: 10,
+         max_concurrent: 1,
+         task_supervisor: SymphonyEx.TestAgentWorkers}
+      )
+
+    wait_until(fn -> Control.candidate_polls() == 1 end)
+
+    snapshot = Orchestrator.snapshot(orchestrator)
+    assert snapshot.candidate_poll_interval_ms == 120_000
+
+    send(orchestrator, :tick)
+    Process.sleep(50)
+
+    assert Control.candidate_polls() == 1
   end
 
   test "suppresses dashboard broadcasts on no-op ticks" do

@@ -7,6 +7,7 @@ defmodule SymphonyEx.GitHub.Adapter do
 
   alias SymphonyEx.Domain.Issue
   alias SymphonyEx.GitHub.Client
+  alias SymphonyEx.Observability
   alias SymphonyEx.Orchestrator.Lifecycle
   alias SymphonyEx.Telemetry
 
@@ -469,6 +470,7 @@ defmodule SymphonyEx.GitHub.Adapter do
 
   @spec emit_write_back_stage(Issue.t(), atom(), atom(), map()) :: :ok
   defp emit_write_back_stage(%Issue{} = issue, stage, outcome, metadata) do
+    Observability.record_write_back_stage(issue.identifier, :github, stage, outcome, metadata)
     Telemetry.emit_write_back_stage(issue.identifier, :github, stage, outcome, metadata)
   end
 

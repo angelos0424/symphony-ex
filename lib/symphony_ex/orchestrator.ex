@@ -21,6 +21,7 @@ defmodule SymphonyEx.Orchestrator do
     Dashboard,
     GitHub.Adapter,
     Logging,
+    Observability,
     RuntimeSnapshot,
     Telemetry,
     WorkflowStore,
@@ -87,7 +88,10 @@ defmodule SymphonyEx.Orchestrator do
           retries: %{String.t() => non_neg_integer()},
           last_persisted_payloads: %{String.t() => map()},
           deferral_counts: %{String.t() => non_neg_integer()},
-          last_runtime_snapshot_fingerprint: integer() | nil
+          last_runtime_snapshot_fingerprint: integer() | nil,
+          candidate_poll_interval_ms: pos_integer(),
+          next_candidate_poll_at_ms: integer(),
+          next_candidate_poll_at_system_ms: integer()
         }
 
   @default_blocked_labels ["blocked", "human-blocked", "needs-human", "do-not-dispatch"]
@@ -121,6 +125,10 @@ defmodule SymphonyEx.Orchestrator do
         do: base_tracker_opts,
         else: Keyword.put(base_tracker_opts, :lifecycle, lifecycle)
 
+    now_mono_ms = System.monotonic_time(:millisecond)
+    now_system_ms = System.system_time(:millisecond)
+    poll_interval_ms = Keyword.get(opts, :poll_interval_ms, 30_000)
+
     state = %{
       tracker: Keyword.get(opts, :tracker, Adapter),
       explicit_issue_identifier: explicit_issue_identifier(opts, base_tracker_opts),
@@ -133,7 +141,7 @@ defmodule SymphonyEx.Orchestrator do
       agent_runner: Keyword.get(opts, :agent_runner, AgentRunner),
       workflow_path: Keyword.get(opts, :workflow_path),
       codex_opts: Keyword.get(opts, :codex, []),
-      poll_interval_ms: Keyword.get(opts, :poll_interval_ms, 30_000),
+      poll_interval_ms: poll_interval_ms,
       max_concurrent: Keyword.get(opts, :max_concurrent, 1),
       max_retries: Keyword.get(opts, :max_retries, 2),
       retry_backoff_ms: Keyword.get(opts, :retry_backoff_ms, 5_000),
@@ -148,7 +156,10 @@ defmodule SymphonyEx.Orchestrator do
       retries: %{},
       last_persisted_payloads: %{},
       deferral_counts: %{},
-      last_runtime_snapshot_fingerprint: nil
+      last_runtime_snapshot_fingerprint: nil,
+      candidate_poll_interval_ms: poll_interval_ms,
+      next_candidate_poll_at_ms: now_mono_ms,
+      next_candidate_poll_at_system_ms: now_system_ms
     }
 
     send(self(), :tick)
@@ -167,6 +178,7 @@ defmodule SymphonyEx.Orchestrator do
       |> dispatch_due_retries()
       |> maybe_dispatch_explicit_issue()
       |> maybe_dispatch_candidates()
+      |> refresh_candidate_poll_backoff()
 
     state = publish_snapshot(state)
     Process.send_after(self(), :tick, state.poll_interval_ms)
@@ -340,19 +352,83 @@ defmodule SymphonyEx.Orchestrator do
 
   @spec maybe_dispatch_candidates(state()) :: state()
   defp maybe_dispatch_candidates(state) do
-    if available_slots(state) == 0 do
-      state
-    else
-      case state.tracker.fetch_candidate_issues(state.tracker_opts) do
-        {:ok, issues} ->
-          {prioritized, next_state} = prioritize_candidates(issues, state)
+    cond do
+      available_slots(state) == 0 ->
+        state
 
-          Enum.reduce_while(prioritized, next_state, &reduce_candidate_dispatch/2)
+      not candidate_poll_due?(state) ->
+        state
 
-        {:error, reason} ->
-          Logger.warning("tracker poll failed", tracker_error: inspect(reason))
-          state
-      end
+      true ->
+        case state.tracker.fetch_candidate_issues(state.tracker_opts) do
+          {:ok, issues} ->
+            {prioritized, next_state} = prioritize_candidates(issues, state)
+
+            prioritized
+            |> Enum.reduce_while(next_state, &reduce_candidate_dispatch/2)
+            |> schedule_next_candidate_poll()
+
+          {:error, reason} ->
+            Logger.warning("tracker poll failed", tracker_error: inspect(reason))
+            schedule_next_candidate_poll(state)
+        end
+    end
+  end
+
+  defp candidate_poll_due?(state) do
+    System.monotonic_time(:millisecond) >= Map.get(state, :next_candidate_poll_at_ms, 0)
+  end
+
+  defp refresh_candidate_poll_backoff(state) do
+    desired_interval = candidate_poll_interval_ms(state)
+    now_mono_ms = System.monotonic_time(:millisecond)
+    now_system_ms = System.system_time(:millisecond)
+
+    current_next_mono = Map.get(state, :next_candidate_poll_at_ms, now_mono_ms)
+    current_next_system = Map.get(state, :next_candidate_poll_at_system_ms, now_system_ms)
+    desired_next_mono = now_mono_ms + desired_interval
+    desired_next_system = now_system_ms + desired_interval
+
+    state
+    |> Map.put(:candidate_poll_interval_ms, desired_interval)
+    |> Map.put(:next_candidate_poll_at_ms, max(current_next_mono, desired_next_mono))
+    |> Map.put(:next_candidate_poll_at_system_ms, max(current_next_system, desired_next_system))
+  end
+
+  defp schedule_next_candidate_poll(state) do
+    interval = candidate_poll_interval_ms(state)
+    now_mono_ms = System.monotonic_time(:millisecond)
+    now_system_ms = System.system_time(:millisecond)
+
+    state
+    |> Map.put(:candidate_poll_interval_ms, interval)
+    |> Map.put(:next_candidate_poll_at_ms, now_mono_ms + interval)
+    |> Map.put(:next_candidate_poll_at_system_ms, now_system_ms + interval)
+  end
+
+  defp candidate_poll_interval_ms(state) do
+    base_interval_ms = state.poll_interval_ms
+    github_rate_limit = Observability.snapshot() |> Map.get(:rate_limits, %{}) |> Map.get(:github)
+
+    cond do
+      is_map(github_rate_limit) and is_integer(github_rate_limit[:retry_after]) and
+          github_rate_limit[:retry_after] > 0 ->
+        max(base_interval_ms, github_rate_limit[:retry_after] * 1_000)
+
+      is_map(github_rate_limit) and is_integer(github_rate_limit[:remaining]) and
+          github_rate_limit[:remaining] <= 25 ->
+        max(base_interval_ms * 8, 120_000)
+
+      is_map(github_rate_limit) and is_integer(github_rate_limit[:remaining]) and
+          github_rate_limit[:remaining] <= 100 ->
+        max(base_interval_ms * 4, 60_000)
+
+      is_map(github_rate_limit) and is_integer(github_rate_limit[:remaining]) and
+          github_rate_limit[:remaining] <= 250 ->
+        max(base_interval_ms * 2, 30_000)
+
+      true ->
+        base_interval_ms
     end
   end
 
