@@ -1165,6 +1165,228 @@ defmodule SymphonyEx.GitHub.AdapterTest do
     assert Enum.at(patch_bodies, 1) =~ "partial_write_back_reason: :project_status_down"
   end
 
+  test "write_run_record emits stage telemetry for successful sync" do
+    test_pid = self()
+
+    handler_id = "adapter-stage-success-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach_many(
+        handler_id,
+        [[:symphony_ex, :write_back, :stage]],
+        fn event, measurements, metadata, _config ->
+          send(test_pid, {:telemetry_event, event, measurements, metadata})
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    issue = %Issue{
+      id: "I_kwDOA1",
+      identifier: "12",
+      title: "Title",
+      description: "Original",
+      state: "Todo",
+      labels: [],
+      assignees: []
+    }
+
+    request_fun = fn request ->
+      cond do
+        request.method == :patch and
+            String.ends_with?(to_string(request.url), "/repos/example/repo/issues/12") ->
+          {:ok, %Req.Response{status: 200, body: %{"body" => request.options[:json][:body]}}}
+
+        to_string(request.url) == "https://api.github.com/graphql" and
+            String.contains?(request.options[:json]["query"], "query ProjectItems") ->
+          {:ok,
+           %Req.Response{
+             status: 200,
+             body: %{
+               "data" => %{
+                 "organization" => %{
+                   "projectV2" => %{
+                     "id" => "PVT_x",
+                     "items" => %{
+                       "nodes" => [
+                         %{
+                           "id" => "PVTI_x",
+                           "projectId" => "PVT_x",
+                           "content" => %{"number" => 12},
+                           "fieldValues" => %{
+                             "nodes" => [
+                               %{
+                                 "name" => "Todo",
+                                 "field" => %{
+                                   "id" => "status-field",
+                                   "name" => "Status",
+                                   "options" => [
+                                     %{"id" => "opt_progress", "name" => "In Progress"}
+                                   ]
+                                 }
+                               }
+                             ]
+                           }
+                         }
+                       ]
+                     }
+                   }
+                 },
+                 "user" => nil
+               }
+             }
+           }}
+
+        to_string(request.url) == "https://api.github.com/graphql" and
+            String.contains?(request.options[:json]["query"], "mutation UpdateProject") ->
+          {:ok, %Req.Response{status: 200, body: %{"data" => %{"updateProjectV2ItemFieldValue" => %{}}}}}
+
+        true ->
+          {:ok, %Req.Response{status: 200, body: %{}}}
+      end
+    end
+
+    opts = [
+      api_key: "gh-token",
+      owner: "example",
+      repo: "repo",
+      project_number: 7,
+      active_states: ["In Progress", "Todo"],
+      terminal_states: ["Done"],
+      write_back: [in_progress_state_names: ["In Progress"]],
+      request_fun: request_fun
+    ]
+
+    assert {:ok, _response} =
+             Adapter.write_run_record(issue, %{status: :running, attempt: 1}, opts)
+
+    assert_receive {:telemetry_event, [:symphony_ex, :write_back, :stage], _measurements,
+                    %{stage: :managed_record, outcome: :success, tracker_kind: :github}}
+
+    assert_receive {:telemetry_event, [:symphony_ex, :write_back, :stage], _measurements,
+                    %{stage: :essential, outcome: :success, tracker_kind: :github}}
+
+    assert_receive {:telemetry_event, [:symphony_ex, :write_back, :stage], _measurements,
+                    %{stage: :optional, outcome: :success, tracker_kind: :github}}
+  end
+
+  test "write_run_record emits stage telemetry for partial optional failure" do
+    test_pid = self()
+
+    handler_id = "adapter-stage-partial-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach_many(
+        handler_id,
+        [[:symphony_ex, :write_back, :stage]],
+        fn event, measurements, metadata, _config ->
+          send(test_pid, {:telemetry_event, event, measurements, metadata})
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    issue = %Issue{
+      id: "I_kwDOA1",
+      identifier: "12",
+      title: "Title",
+      description: "Original",
+      state: "Todo",
+      labels: [],
+      assignees: []
+    }
+
+    request_fun = fn request ->
+      cond do
+        request.method == :patch and
+            String.ends_with?(to_string(request.url), "/repos/example/repo/issues/12") ->
+          {:ok, %Req.Response{status: 200, body: %{"body" => request.options[:json][:body]}}}
+
+        to_string(request.url) == "https://api.github.com/graphql" and
+            String.contains?(request.options[:json]["query"], "query ProjectItems") ->
+          {:ok,
+           %Req.Response{
+             status: 200,
+             body: %{
+               "data" => %{
+                 "organization" => %{
+                   "projectV2" => %{
+                     "id" => "PVT_x",
+                     "items" => %{
+                       "nodes" => [
+                         %{
+                           "id" => "PVTI_x",
+                           "projectId" => "PVT_x",
+                           "content" => %{"number" => 12},
+                           "fieldValues" => %{
+                             "nodes" => [
+                               %{
+                                 "name" => "In Progress",
+                                 "field" => %{
+                                   "id" => "status-field",
+                                   "name" => "Status",
+                                   "options" => [
+                                     %{"id" => "opt_progress", "name" => "In Progress"}
+                                   ]
+                                 }
+                               }
+                             ]
+                           }
+                         }
+                       ]
+                     }
+                   }
+                 },
+                 "user" => nil
+               }
+             }
+           }}
+
+        request.method == :post and
+            String.ends_with?(to_string(request.url), "/repos/example/repo/issues/12/labels") ->
+          {:error, :labels_down}
+
+        true ->
+          {:ok, %Req.Response{status: 200, body: %{}}}
+      end
+    end
+
+    opts = [
+      api_key: "gh-token",
+      owner: "example",
+      repo: "repo",
+      project_number: 7,
+      active_states: ["In Progress", "Todo"],
+      terminal_states: ["Done"],
+      write_back: [
+        enabled: true,
+        in_progress_state_names: ["In Progress"],
+        labels: ["symphony"],
+        running: [labels: ["agent:active"]]
+      ],
+      request_fun: request_fun
+    ]
+
+    assert {:ok, _response} =
+             Adapter.write_run_record(issue, %{status: :running, attempt: 1}, opts)
+
+    assert_receive {:telemetry_event, [:symphony_ex, :write_back, :stage], _measurements,
+                    %{stage: :managed_record, outcome: :success, tracker_kind: :github}}
+
+    assert_receive {:telemetry_event, [:symphony_ex, :write_back, :stage], _measurements,
+                    %{stage: :essential, outcome: :success, tracker_kind: :github}}
+
+    assert_receive {:telemetry_event, [:symphony_ex, :write_back, :stage], _measurements,
+                    %{stage: :optional, outcome: :partial, failed_stage: :label_sync_failed,
+                      tracker_kind: :github}}
+
+    assert_receive {:telemetry_event, [:symphony_ex, :write_back, :stage], _measurements,
+                    %{stage: :annotation, outcome: :success, failed_stage: :label_sync_failed,
+                      tracker_kind: :github}}
+  end
+
   defp collect_requests(count, acc \\ [])
   defp collect_requests(0, acc), do: Enum.reverse(acc)
 

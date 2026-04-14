@@ -11,6 +11,7 @@ defmodule SymphonyEx.Telemetry do
     * `[:symphony_ex, :dispatch]` — an issue was dispatched for execution
     * `[:symphony_ex, :turn, :completed]` — a single agent turn finished
     * `[:symphony_ex, :write_back]` — a run-state record was written to the tracker
+    * `[:symphony_ex, :write_back, :stage]` — a write-back stage succeeded, failed, or partially completed
     * `[:symphony_ex, :run, :finished]` — an agent run completed (success or failure)
     * `[:symphony_ex, :rate_limit]` — an external tracker API reported rate-limit state
   """
@@ -48,6 +49,23 @@ defmodule SymphonyEx.Telemetry do
       [:symphony_ex, :write_back],
       %{system_time: System.system_time(:millisecond)},
       %{issue_identifier: issue_identifier, tracker_kind: tracker_kind}
+    )
+  end
+
+  @doc """
+  Emits `[:symphony_ex, :write_back, :stage]` for stage-level tracker sync visibility.
+  """
+  @spec emit_write_back_stage(String.t(), atom(), atom(), atom(), map()) :: :ok
+  def emit_write_back_stage(issue_identifier, tracker_kind, stage, outcome, metadata \\ %{}) do
+    :telemetry.execute(
+      [:symphony_ex, :write_back, :stage],
+      %{system_time: System.system_time(:millisecond)},
+      Map.merge(metadata, %{
+        issue_identifier: issue_identifier,
+        tracker_kind: tracker_kind,
+        stage: stage,
+        outcome: outcome
+      })
     )
   end
 

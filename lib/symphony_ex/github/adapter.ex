@@ -8,6 +8,7 @@ defmodule SymphonyEx.GitHub.Adapter do
   alias SymphonyEx.Domain.Issue
   alias SymphonyEx.GitHub.Client
   alias SymphonyEx.Orchestrator.Lifecycle
+  alias SymphonyEx.Telemetry
 
   @managed_start "<!-- symphony:managed -->"
   @managed_end "<!-- /symphony:managed -->"
@@ -62,19 +63,36 @@ defmodule SymphonyEx.GitHub.Adapter do
     body = render_run_record(issue, attrs)
     description = upsert_managed_working_record(issue.description || "", body)
 
-    with {:ok, response} <- update_issue_description(issue.identifier, description, opts) do
-      case sync_write_back(issue, attrs, opts) do
-        :ok ->
-          {:ok, response}
+    case update_issue_description(issue.identifier, description, opts) do
+      {:ok, response} ->
+        emit_write_back_stage(issue, :managed_record, :success, %{status: Map.get(attrs, :status)})
 
-        {:ok, {:partial, stage, reason}} ->
-          annotate_partial_write_back(issue, attrs, stage, reason, opts)
-          {:ok, response}
+        case sync_write_back(issue, attrs, opts) do
+          :ok ->
+            {:ok, response}
 
-        {:error, stage, reason} ->
-          annotate_partial_write_back(issue, attrs, stage, reason, opts)
-          {:error, {:partial_write_back, stage, reason}}
-      end
+          {:ok, {:partial, stage, reason}} ->
+            emit_write_back_stage(issue, :optional, :partial, %{
+              failed_stage: stage,
+              reason: inspect(reason)
+            })
+
+            annotate_partial_write_back(issue, attrs, stage, reason, opts)
+            {:ok, response}
+
+          {:error, stage, reason} ->
+            emit_write_back_stage(issue, :essential, :failed, %{
+              failed_stage: stage,
+              reason: inspect(reason)
+            })
+
+            annotate_partial_write_back(issue, attrs, stage, reason, opts)
+            {:error, {:partial_write_back, stage, reason}}
+        end
+
+      {:error, reason} ->
+        emit_write_back_stage(issue, :managed_record, :failed, %{reason: inspect(reason)})
+        {:error, reason}
     end
   end
 
@@ -228,8 +246,13 @@ defmodule SymphonyEx.GitHub.Adapter do
 
   defp sync_write_back(%Issue{} = issue, attrs, opts) do
     with :ok <- sync_essential_write_back(issue, attrs, opts) do
+      emit_write_back_stage(issue, :essential, :success, %{status: Map.get(attrs, :status)})
+
       case sync_optional_write_back(issue, attrs, opts) do
-        :ok -> :ok
+        :ok ->
+          emit_write_back_stage(issue, :optional, :success, %{status: Map.get(attrs, :status)})
+          :ok
+
         {:error, stage, reason} -> {:ok, {:partial, stage, reason}}
       end
     end
@@ -426,8 +449,27 @@ defmodule SymphonyEx.GitHub.Adapter do
 
     partial_body = render_run_record(issue, partial_attrs)
     partial_description = upsert_managed_working_record(issue.description || "", partial_body)
-    _ = update_issue_description(issue.identifier, partial_description, opts)
+
+    case update_issue_description(issue.identifier, partial_description, opts) do
+      {:ok, _response} ->
+        emit_write_back_stage(issue, :annotation, :success, %{
+          failed_stage: stage,
+          reason: inspect(reason)
+        })
+
+      {:error, annotation_reason} ->
+        emit_write_back_stage(issue, :annotation, :failed, %{
+          failed_stage: stage,
+          reason: inspect(annotation_reason)
+        })
+    end
+
     :ok
+  end
+
+  @spec emit_write_back_stage(Issue.t(), atom(), atom(), map()) :: :ok
+  defp emit_write_back_stage(%Issue{} = issue, stage, outcome, metadata) do
+    Telemetry.emit_write_back_stage(issue.identifier, :github, stage, outcome, metadata)
   end
 
   @spec project_field_failure_stage(String.t()) :: atom()
