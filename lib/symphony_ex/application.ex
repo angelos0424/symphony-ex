@@ -17,7 +17,10 @@ defmodule SymphonyEx.Application do
       ] ++
         observability_children() ++
         pubsub_children() ++
-        workflow_store_children() ++ orchestrator_children() ++ endpoint_children()
+        workflow_store_children() ++
+        single_active_guard_children() ++
+        orchestrator_children() ++
+        endpoint_children()
 
     opts = [strategy: :one_for_one, name: SymphonyEx.Supervisor]
     Supervisor.start_link(children, opts)
@@ -63,6 +66,31 @@ defmodule SymphonyEx.Application do
           {SymphonyEx.Orchestrator,
            Keyword.put_new(opts, :task_supervisor, SymphonyEx.AgentWorkers)}
         ]
+    end
+  end
+
+  @spec single_active_guard_children() :: [Supervisor.child_spec()]
+  defp single_active_guard_children do
+    case Application.get_env(:symphony_ex, SymphonyEx.Orchestrator, nil) do
+      opts when is_list(opts) and opts != [] ->
+        workflow_path = Keyword.get(opts, :workflow_path)
+        lock_path = Keyword.get(opts, :single_active_lock_path)
+
+        if workflow_path || lock_path do
+          [
+            {SymphonyEx.SingleActiveGuard,
+             [
+               workflow_path: workflow_path,
+               lock_path: lock_path,
+               name: SymphonyEx.SingleActiveGuard
+             ]}
+          ]
+        else
+          []
+        end
+
+      _other ->
+        []
     end
   end
 
