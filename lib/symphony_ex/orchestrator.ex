@@ -94,6 +94,7 @@ defmodule SymphonyEx.Orchestrator do
   @default_serialization_label_prefixes ["scope:", "service:", "path:", "package:", "release:"]
   @default_starvation_bonus_step 25
   @default_starvation_bonus_cap 100
+  @github_visible_gating_reasons [:human_blocked, :missing_title, :serialized_conflict]
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
@@ -266,7 +267,7 @@ defmodule SymphonyEx.Orchestrator do
         {:cont, next_state}
 
       {:skip, next_state, reason} ->
-        log_gated_issue(acc, retry.issue, reason, classify_issue(retry.issue))
+        next_state = note_gated_issue(next_state, retry.issue, reason, classify_issue(retry.issue))
         {:cont, put_in(next_state, [:retry_queue, identifier], retry)}
 
       {:halt, next_state} ->
@@ -330,8 +331,7 @@ defmodule SymphonyEx.Orchestrator do
   defp handle_dispatch_result(_state, {:ok, next_state}, _issue), do: next_state
 
   defp handle_dispatch_result(_state, {:skip, next_state, reason}, issue) do
-    log_gated_issue(next_state, issue, reason, classify_issue(issue))
-    next_state
+    note_gated_issue(next_state, issue, reason, classify_issue(issue))
   end
 
   defp handle_dispatch_result(_state, {:halt, next_state}, _issue), do: next_state
@@ -360,13 +360,13 @@ defmodule SymphonyEx.Orchestrator do
       {:ok, hydrated_issue} ->
         case dispatch_candidate(acc, hydrated_issue, 0, :candidate) do
           {:ok, updated_state} -> {:cont, updated_state}
-          {:skip, updated_state, _reason} -> {:cont, updated_state}
+          {:skip, updated_state, reason} ->
+            {:cont, note_gated_issue(updated_state, hydrated_issue, reason, classify_issue(hydrated_issue))}
           {:halt, updated_state} -> {:halt, updated_state}
         end
 
       {:skip, reason} ->
-        log_gated_issue(acc, issue, reason, classify_issue(issue))
-        {:cont, acc}
+        {:cont, note_gated_issue(acc, issue, reason, classify_issue(issue))}
     end
   end
 
@@ -764,17 +764,18 @@ defmodule SymphonyEx.Orchestrator do
 
   @spec prioritize_candidates([Issue.t()], state()) :: {[Issue.t()], state()}
   defp prioritize_candidates(issues, state) do
-    eligible =
-      Enum.reject(issues, fn issue ->
-        case dispatch_eligibility(state, issue) do
+    {eligible, state} =
+      Enum.reduce(issues, {[], state}, fn issue, {eligible, acc} ->
+        case dispatch_eligibility(acc, issue) do
           :ok ->
-            false
+            {[issue | eligible], acc}
 
           {:skip, reason} ->
-            log_gated_issue(state, issue, reason, classify_issue(issue))
-            true
+            {eligible, note_gated_issue(acc, issue, reason, classify_issue(issue))}
         end
       end)
+
+    eligible = Enum.reverse(eligible)
 
     next_deferral_counts =
       eligible
@@ -1041,5 +1042,51 @@ defmodule SymphonyEx.Orchestrator do
         Logging.dispatch_metadata(issue, reason, klass, issue_conflict_keys(issue, state))
       )
     )
+  end
+
+  @spec note_gated_issue(state(), Issue.t(), atom(), concurrency_class()) :: state()
+  defp note_gated_issue(state, issue, reason, klass) do
+    log_gated_issue(state, issue, reason, klass)
+
+    if reason in @github_visible_gating_reasons do
+      persist_gated_issue(state, issue, reason, klass)
+    else
+      state
+    end
+  end
+
+  @spec persist_gated_issue(state(), Issue.t(), atom(), concurrency_class()) :: state()
+  defp persist_gated_issue(state, issue, reason, klass) do
+    payload = %{
+      status: :gated,
+      attempt: Map.get(state.retries, issue.identifier, 0),
+      gating_reason: reason,
+      class: klass,
+      conflict_keys: issue_conflict_keys(issue, state) |> Logging.normalize_conflict_keys()
+    }
+
+    if Map.get(state.last_persisted_payloads, issue.identifier) == payload do
+      state
+    else
+      case state.tracker.write_run_record(issue, payload, state.tracker_opts) do
+        {:ok, _} ->
+          put_in(state, [:last_persisted_payloads, issue.identifier], payload)
+
+        {:error, reason_value} ->
+          Logger.warning(
+            "tracker gated write-back failed",
+            Logging.logger_metadata(
+              Logging.issue_metadata(issue)
+              |> Map.merge(%{
+                gating_reason: reason,
+                class: klass,
+                tracker_error: inspect(reason_value)
+              })
+            )
+          )
+
+          state
+      end
+    end
   end
 end

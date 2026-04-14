@@ -406,6 +406,34 @@ defmodule SymphonyEx.OrchestratorTest do
     assert snapshot.blocked_labels |> MapSet.member?("blocked")
   end
 
+  test "writes GitHub-visible gating reason for blocked issues and dedupes repeated skips" do
+    blocked = issue_fixture("BLOCKED-1", labels: ["blocked"])
+
+    start_supervised!(
+      {Control,
+       test_pid: self(),
+       candidate_batches: [[blocked], [blocked], []]}
+    )
+
+    orchestrator = start_orchestrator(max_concurrent: 1)
+
+    Process.sleep(100)
+    send(orchestrator, :tick)
+    Process.sleep(100)
+
+    gated_updates =
+      Control.updates()
+      |> Enum.filter(fn %{issue: issue, payload: payload} ->
+        issue.identifier == "BLOCKED-1" and payload.status == :gated
+      end)
+
+    assert length(gated_updates) == 1
+
+    assert [%{payload: payload}] = gated_updates
+    assert payload.gating_reason == :human_blocked
+    assert payload.attempt == 0
+  end
+
   test "respects per-class concurrency limits when dispatching in parallel" do
     code_a = issue_fixture("10", labels: ["bug"])
     code_b = issue_fixture("11", labels: ["feature"])
@@ -511,6 +539,36 @@ defmodule SymphonyEx.OrchestratorTest do
     end)
 
     assert Control.runs() == ["18", "17"]
+  end
+
+  test "writes GitHub-visible gating reason for serialized conflicts" do
+    issue_a = issue_fixture("30", labels: ["bug"], conflict_hints: ["service:api"])
+    issue_b = issue_fixture("31", labels: ["feature"], conflict_hints: ["service:api"])
+
+    start_supervised!(
+      {Control,
+       test_pid: self(),
+       candidate_batches: [[issue_a, issue_b]],
+       run_results: [%{status: :success, events: [], error: nil}]}
+    )
+
+    orchestrator =
+      start_orchestrator(
+        max_concurrent: 2,
+        concurrency_limits: %{code: 2, docs: 1, default: 1}
+      )
+
+    wait_until(fn ->
+      snapshot = Orchestrator.snapshot(orchestrator)
+      map_size(snapshot.running) == 0 and length(Control.runs()) == 1
+    end)
+
+    assert Control.runs() == ["30"]
+
+    assert Enum.any?(Control.updates(), fn %{issue: issue, payload: payload} ->
+             issue.identifier == "31" and payload.status == :gated and
+               payload.gating_reason == :serialized_conflict
+           end)
   end
 
   test "serializes candidates that share an explicit conflict boundary label" do

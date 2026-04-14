@@ -224,6 +224,8 @@ defmodule SymphonyEx.GitHub.Adapter do
 
   @spec sync_write_back(Issue.t(), map(), keyword()) ::
           :ok | {:ok, {:partial, atom(), term()}} | {:error, atom(), term()}
+  defp sync_write_back(_issue, %{status: :gated}, _opts), do: :ok
+
   defp sync_write_back(%Issue{} = issue, attrs, opts) do
     with :ok <- sync_essential_write_back(issue, attrs, opts) do
       case sync_optional_write_back(issue, attrs, opts) do
