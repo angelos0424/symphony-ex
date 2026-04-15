@@ -116,7 +116,7 @@ defmodule SymphonyEx.Codex.AppServer do
     port = spawn_codex(state.command, state.cwd)
 
     state = %{state | port: port, status: :initializing}
-    send_rpc(state, "initialize", %{}, from)
+    send_rpc(state, "initialize", initialize_params(), from)
   end
 
   def handle_call({:rpc, method, params}, from, state) do
@@ -223,6 +223,22 @@ defmodule SymphonyEx.Codex.AppServer do
     :ok
   end
 
+  @spec send_notification(port() | nil, String.t(), map()) :: :ok
+  defp send_notification(port, method, params) do
+    send_to_port(port, JsonRpc.encode_notification(method, params) <> "\n")
+  end
+
+  @spec initialize_params() :: map()
+  defp initialize_params do
+    %{
+      "clientInfo" => %{
+        "name" => "symphony_ex",
+        "title" => "SymphonyEx",
+        "version" => Application.spec(:symphony_ex, :vsn) |> to_string()
+      }
+    }
+  end
+
   @spec handle_stdout_line(String.t(), state()) :: {:noreply, state()}
   defp handle_stdout_line(line, state) do
     case JsonRpc.decode_line(line) do
@@ -269,7 +285,9 @@ defmodule SymphonyEx.Codex.AppServer do
           case reply do
             {:ok, result} when state.status == :initializing ->
               caps = extract_capabilities(result)
-              %{state | capabilities: caps, status: :running}
+              updated_state = %{state | capabilities: caps, status: :running}
+              send_notification(updated_state.port, "initialized", %{})
+              updated_state
 
             _ ->
               state

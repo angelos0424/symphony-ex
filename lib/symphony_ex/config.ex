@@ -492,6 +492,8 @@ defmodule SymphonyEx.Config do
 
   @spec normalize_key(String.t() | atom()) :: atom()
   defp normalize_key(key) when is_binary(key) do
+    Code.ensure_loaded!(Schema)
+
     key
     |> String.replace("-", "_")
     |> existing_atom!()

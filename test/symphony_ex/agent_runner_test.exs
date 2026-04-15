@@ -120,6 +120,59 @@ defmodule SymphonyEx.AgentRunnerTest do
     def shutdown(server), do: Agent.stop(server, :normal, 1_000)
   end
 
+  defmodule CapturingAppServer do
+    use Agent
+
+    def start_link(opts) do
+      send_test_message({:app_server_started, opts})
+
+      Agent.start_link(fn ->
+        %{events: [], capabilities: %{supports_thread_reuse: true, supports_events: true}}
+      end)
+    end
+
+    def subscribe(_server, _pid \\ self()), do: :ok
+
+    def initialize(_server) do
+      {:ok, %{"supportsThreadReuse" => true, "supportsEvents" => true}}
+    end
+
+    def capabilities(server), do: Agent.get(server, & &1.capabilities)
+
+    def start_thread(_server, params) do
+      send_test_message({:app_server_thread_start, params})
+      {:ok, %{"thread" => %{"id" => "thread-capture"}}}
+    end
+
+    def start_turn(server, params) do
+      send_test_message({:app_server_turn_start, params})
+
+      event = %Events{
+        event: :turn_completed,
+        timestamp: DateTime.utc_now() |> DateTime.to_iso8601(),
+        raw_method: "turn.completed",
+        message: "done",
+        params: %{"turnId" => "turn-capture"},
+        usage: %{input_tokens: 1, output_tokens: 1, total_tokens: 2}
+      }
+
+      Agent.update(server, fn state -> %{state | events: [event]} end)
+      send(self(), {:app_server_event, event})
+      {:ok, %{"turnId" => "turn-capture"}}
+    end
+
+    def get_events(server), do: Agent.get(server, & &1.events)
+    def alive?(_server), do: true
+    def cancel_turn(_server), do: :ok
+    def shutdown(server), do: Agent.stop(server, :normal, 1_000)
+
+    defp send_test_message(message) do
+      if pid = Application.get_env(:symphony_ex, :agent_runner_test_pid) do
+        send(pid, message)
+      end
+    end
+  end
+
   test "reuses recoverable thread metadata and clears session file on success" do
     workspace_path = tmp_workspace("recovery-success")
     workflow_path = write_workflow(workspace_path)
@@ -279,6 +332,49 @@ defmodule SymphonyEx.AgentRunnerTest do
 
     assert run_finished["error_category"] == "process_exit"
     assert run_finished["status"] == "failed"
+  end
+
+  test "propagates sandbox and approval settings into app-server startup and turn requests" do
+    workspace_path = tmp_workspace("sandbox-config")
+    workflow_path = write_workflow(workspace_path)
+    issue = issue_fixture("SYM-306")
+
+    Application.put_env(:symphony_ex, :agent_runner_test_pid, self())
+
+    on_exit(fn ->
+      Application.delete_env(:symphony_ex, :agent_runner_test_pid)
+    end)
+
+    result =
+      AgentRunner.run(issue,
+        workspace_path: workspace_path,
+        workflow_path: workflow_path,
+        codex: [
+          command: "codex app-server",
+          approval_policy: :never,
+          thread_sandbox: "dangerFullAccess"
+        ],
+        app_server: CapturingAppServer
+      )
+
+    assert result.status == :success
+
+    assert_receive {:app_server_started, opts}
+    assert opts[:command] =~ ~s(codex app-server)
+    assert opts[:command] =~ ~s(sandbox_mode="danger-full-access")
+    assert opts[:command] =~ ~s(approval_policy="never")
+
+    assert_receive {:app_server_thread_start, thread_params}
+    assert thread_params["cwd"] == workspace_path
+    assert thread_params["approvalPolicy"] == "never"
+    assert thread_params["sandbox"] == "danger-full-access"
+
+    assert_receive {:app_server_turn_start, turn_params}
+    assert turn_params["cwd"] == workspace_path
+    assert turn_params["threadId"] == "thread-capture"
+    assert is_list(turn_params["input"])
+    assert [%{"type" => "text", "text" => _prompt}] = turn_params["input"]
+    assert turn_params["sandboxPolicy"] == %{"type" => "dangerFullAccess"}
   end
 
   defp issue_fixture(identifier) do

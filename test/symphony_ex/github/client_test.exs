@@ -222,6 +222,76 @@ defmodule SymphonyEx.GitHub.ClientTest do
     assert request.options[:json]["variables"] == %{"owner" => "example-org", "number" => 7}
   end
 
+  test "lists user-owned project items when organization lookup returns a benign partial error" do
+    request_fun = fn request ->
+      send(self(), {:github_request, request})
+
+      body = %{
+        "data" => %{
+          "organization" => nil,
+          "user" => %{
+            "projectV2" => %{
+              "id" => "PVT_user",
+              "fields" => %{
+                "nodes" => [
+                  %{
+                    "id" => "status-field",
+                    "name" => "Status",
+                    "options" => [
+                      %{"id" => "opt_todo", "name" => "Todo"}
+                    ]
+                  }
+                ]
+              },
+              "items" => %{
+                "nodes" => [
+                  %{
+                    "id" => "PVTI_user",
+                    "content" => %{"number" => 42, "title" => "User project issue"},
+                    "fieldValues" => %{
+                      "nodes" => [
+                        %{
+                          "name" => "Todo",
+                          "field" => %{
+                            "id" => "status-field",
+                            "name" => "Status",
+                            "options" => [
+                              %{"id" => "opt_todo", "name" => "Todo"}
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "errors" => [
+          %{
+            "message" => "Could not resolve to an Organization with the login of 'example-user'.",
+            "path" => ["organization"],
+            "type" => "NOT_FOUND"
+          }
+        ]
+      }
+
+      {:ok, %Req.Response{status: 200, body: body}}
+    end
+
+    opts = [
+      api_key: "gh-token",
+      owner: "example-user",
+      project_number: 3,
+      request_fun: request_fun
+    ]
+
+    assert {:ok, [item]} = Client.list_project_items(opts)
+    assert item["id"] == "PVTI_user"
+    assert item["content"]["number"] == 42
+  end
+
   test "updates project status via GraphQL mutation" do
     opts = [
       api_key: "gh-token",

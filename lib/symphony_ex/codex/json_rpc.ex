@@ -28,6 +28,12 @@ defmodule SymphonyEx.Codex.JsonRpc do
     |> Jason.encode!()
   end
 
+  @spec encode_notification(String.t(), map()) :: String.t()
+  def encode_notification(method, params \\ %{}) do
+    %{jsonrpc: "2.0", method: method, params: params}
+    |> Jason.encode!()
+  end
+
   @spec decode_line(String.t()) ::
           {:response, response()} | {:notification, notification()} | {:error, term()}
   def decode_line(line) do

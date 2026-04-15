@@ -113,6 +113,7 @@ defmodule SymphonyEx do
 
       endpoint_opts =
         [
+          adapter: Bandit.PhoenixAdapter,
           http: [ip: ip_tuple(host), port: port],
           url: [host: host, port: port],
           server: true,

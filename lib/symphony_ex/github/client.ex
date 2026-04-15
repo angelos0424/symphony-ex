@@ -138,7 +138,7 @@ defmodule SymphonyEx.GitHub.Client do
 
     variables = %{"owner" => owner, "number" => project_number}
 
-    with {:ok, data} <- graphql(query, variables, opts),
+    with {:ok, data} <- graphql(query, variables, Keyword.put(opts, :allow_partial_data, true)),
          {:ok, project} <- extract_project(data, owner) do
       project_fields =
         project
@@ -624,6 +624,7 @@ defmodule SymphonyEx.GitHub.Client do
   @spec graphql(String.t(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def graphql(query, variables, opts) do
     endpoint = Keyword.get(opts, :graphql_endpoint, @default_graphql_endpoint)
+    allow_partial_data = Keyword.get(opts, :allow_partial_data, false)
 
     request(:post, endpoint, opts,
       headers: @default_headers,
@@ -632,7 +633,13 @@ defmodule SymphonyEx.GitHub.Client do
     |> case do
       {:ok, body} ->
         case body do
-          %{"errors" => [_ | _] = errors} -> {:error, {:graphql_errors, errors}}
+          %{"errors" => [_ | _], "data" => data}
+          when allow_partial_data and is_map(data) and map_size(data) > 0 ->
+            {:ok, data}
+
+          %{"errors" => [_ | _] = errors} ->
+            {:error, {:graphql_errors, errors}}
+
           %{"data" => data} when is_map(data) -> {:ok, data}
           other -> {:error, {:unexpected_body, other}}
         end

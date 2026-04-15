@@ -760,6 +760,7 @@ defmodule SymphonyEx.GitHub.Adapter do
   defp lifecycle_from_opts(opts) do
     case Keyword.get(opts, :lifecycle) do
       %Lifecycle{} = lc -> lc
+      lifecycle_opts when is_list(lifecycle_opts) -> Lifecycle.new(lifecycle_opts)
       nil -> lifecycle_from_legacy_opts(opts)
     end
   end

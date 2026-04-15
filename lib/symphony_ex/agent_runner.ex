@@ -32,7 +32,7 @@ defmodule SymphonyEx.AgentRunner do
     context_docs = Keyword.get(opts, :context_docs, "")
     app_server = Keyword.get(opts, :app_server, AppServer)
 
-    command = Keyword.get(codex_config, :command, "codex app-server")
+    command = build_codex_command(codex_config)
     turn_timeout = Keyword.get(codex_config, :turn_timeout_ms, 3_600_000)
     stall_timeout = Keyword.get(codex_config, :stall_timeout_ms, 300_000)
 
@@ -76,6 +76,7 @@ defmodule SymphonyEx.AgentRunner do
             prompt,
             issue,
             workspace_path,
+            codex_config,
             turn_timeout,
             stall_timeout,
             recovered_session
@@ -93,6 +94,7 @@ defmodule SymphonyEx.AgentRunner do
           String.t(),
           Issue.t(),
           Path.t(),
+          keyword(),
           pos_integer(),
           pos_integer(),
           SessionStore.session_data() | nil
@@ -104,6 +106,7 @@ defmodule SymphonyEx.AgentRunner do
          prompt,
          issue,
          workspace_path,
+         codex_config,
          turn_timeout,
          stall_timeout,
          recovered_session
@@ -111,8 +114,13 @@ defmodule SymphonyEx.AgentRunner do
     with {:ok, _init_result} <- app_server.initialize(server),
          capabilities = app_server.capabilities(server),
          {:ok, thread_result} <-
-           app_server.start_thread(server, thread_start_params(recovered_session)),
-         thread_id <- thread_result["threadId"] || thread_result["thread_id"],
+           app_server.start_thread(
+             server,
+             thread_start_params(recovered_session, workspace_path, codex_config)
+           ),
+         thread_id <-
+           thread_result["threadId"] || thread_result["thread_id"] ||
+             get_in(thread_result, ["thread", "id"]),
          {:ok, session} <-
            persist_session_started(
              workspace_path,
@@ -122,10 +130,10 @@ defmodule SymphonyEx.AgentRunner do
              thread_id
            ),
          {:ok, _turn_result} <-
-           app_server.start_turn(server, %{
-             "input" => prompt,
-             "threadId" => thread_id
-           }) do
+           app_server.start_turn(
+             server,
+             turn_start_params(thread_id, prompt, workspace_path, codex_config)
+           ) do
       Logger.metadata(
         Logging.logger_metadata(
           Logging.run_metadata(issue,
@@ -446,10 +454,133 @@ defmodule SymphonyEx.AgentRunner do
     end
   end
 
-  @spec thread_start_params(SessionStore.session_data() | nil) :: map()
-  defp thread_start_params(nil), do: %{}
-  defp thread_start_params(%{thread_id: nil}), do: %{}
-  defp thread_start_params(%{thread_id: thread_id}), do: %{"threadId" => thread_id}
+  @spec thread_start_params(SessionStore.session_data() | nil, String.t(), keyword()) :: map()
+  defp thread_start_params(session, workspace_path, codex_config) do
+    %{}
+    |> maybe_put_thread_id(session)
+    |> Map.put("cwd", workspace_path)
+    |> maybe_put(
+      "approvalPolicy",
+      app_server_approval_policy(Keyword.get(codex_config, :approval_policy))
+    )
+    |> maybe_put("sandbox", app_server_thread_sandbox(Keyword.get(codex_config, :thread_sandbox)))
+  end
+
+  @spec turn_start_params(String.t(), String.t(), String.t(), keyword()) :: map()
+  defp turn_start_params(thread_id, prompt, workspace_path, codex_config) do
+    %{
+      "input" => [%{"type" => "text", "text" => prompt}],
+      "threadId" => thread_id,
+      "cwd" => workspace_path
+    }
+    |> maybe_put(
+      "sandboxPolicy",
+      app_server_turn_sandbox(Keyword.get(codex_config, :thread_sandbox), workspace_path)
+    )
+  end
+
+  @spec build_codex_command(keyword()) :: String.t()
+  defp build_codex_command(codex_config) do
+    codex_config
+    |> Keyword.get(:command, "codex app-server")
+    |> maybe_append_config_override(
+      "approval_policy",
+      codex_cli_approval_policy(Keyword.get(codex_config, :approval_policy))
+    )
+    |> maybe_append_config_override(
+      "sandbox_mode",
+      codex_cli_sandbox_mode(Keyword.get(codex_config, :thread_sandbox))
+    )
+  end
+
+  @spec maybe_append_config_override(String.t(), String.t(), String.t() | nil) :: String.t()
+  defp maybe_append_config_override(command, _key, nil), do: command
+
+  defp maybe_append_config_override(command, key, value) do
+    if String.contains?(command, key) do
+      command
+    else
+      command <> ~s( -c ) <> key <> ~s(=\") <> value <> ~s(\")
+    end
+  end
+
+  @spec maybe_put_thread_id(map(), SessionStore.session_data() | nil) :: map()
+  defp maybe_put_thread_id(params, nil), do: params
+  defp maybe_put_thread_id(params, %{thread_id: nil}), do: params
+
+  defp maybe_put_thread_id(params, %{thread_id: thread_id}),
+    do: Map.put(params, "threadId", thread_id)
+
+  @spec maybe_put(map(), String.t(), any()) :: map()
+  defp maybe_put(params, _key, nil), do: params
+  defp maybe_put(params, key, value), do: Map.put(params, key, value)
+
+  @spec codex_cli_approval_policy(atom() | nil) :: String.t() | nil
+  defp codex_cli_approval_policy(nil), do: nil
+  defp codex_cli_approval_policy(:never), do: "never"
+  defp codex_cli_approval_policy(:on_request), do: "on-request"
+  defp codex_cli_approval_policy(:on_failure), do: "on-request"
+  defp codex_cli_approval_policy(value) when is_binary(value), do: value
+
+  @spec app_server_approval_policy(atom() | nil) :: String.t() | nil
+  defp app_server_approval_policy(nil), do: nil
+  defp app_server_approval_policy(:never), do: "never"
+  defp app_server_approval_policy(:on_request), do: "onRequest"
+  defp app_server_approval_policy(:on_failure), do: "onRequest"
+  defp app_server_approval_policy(value) when is_binary(value), do: value
+
+  @spec codex_cli_sandbox_mode(String.t() | nil) :: String.t() | nil
+  defp codex_cli_sandbox_mode(nil), do: nil
+  defp codex_cli_sandbox_mode("workspaceWrite"), do: "workspace-write"
+  defp codex_cli_sandbox_mode("workspace-write"), do: "workspace-write"
+  defp codex_cli_sandbox_mode("readOnly"), do: "read-only"
+  defp codex_cli_sandbox_mode("read-only"), do: "read-only"
+  defp codex_cli_sandbox_mode("dangerFullAccess"), do: "danger-full-access"
+  defp codex_cli_sandbox_mode("danger-full-access"), do: "danger-full-access"
+  defp codex_cli_sandbox_mode("externalSandbox"), do: "danger-full-access"
+  defp codex_cli_sandbox_mode("external-sandbox"), do: "danger-full-access"
+
+  @spec app_server_thread_sandbox(String.t() | nil) :: String.t() | nil
+  defp app_server_thread_sandbox(nil), do: nil
+  defp app_server_thread_sandbox("workspaceWrite"), do: "workspace-write"
+  defp app_server_thread_sandbox("workspace-write"), do: "workspace-write"
+  defp app_server_thread_sandbox("readOnly"), do: "read-only"
+  defp app_server_thread_sandbox("read-only"), do: "read-only"
+  defp app_server_thread_sandbox("dangerFullAccess"), do: "danger-full-access"
+  defp app_server_thread_sandbox("danger-full-access"), do: "danger-full-access"
+  defp app_server_thread_sandbox("externalSandbox"), do: "danger-full-access"
+  defp app_server_thread_sandbox("external-sandbox"), do: "danger-full-access"
+
+  @spec app_server_turn_sandbox(String.t() | nil, String.t()) :: map() | nil
+  defp app_server_turn_sandbox(nil, _workspace_path), do: nil
+
+  defp app_server_turn_sandbox("workspaceWrite", workspace_path) do
+    %{"type" => "workspaceWrite", "writableRoots" => [workspace_path], "networkAccess" => true}
+  end
+
+  defp app_server_turn_sandbox("workspace-write", workspace_path),
+    do: app_server_turn_sandbox("workspaceWrite", workspace_path)
+
+  defp app_server_turn_sandbox("readOnly", _workspace_path) do
+    %{"type" => "readOnly", "access" => %{"type" => "fullAccess"}}
+  end
+
+  defp app_server_turn_sandbox("read-only", workspace_path),
+    do: app_server_turn_sandbox("readOnly", workspace_path)
+
+  defp app_server_turn_sandbox("dangerFullAccess", _workspace_path) do
+    %{"type" => "dangerFullAccess"}
+  end
+
+  defp app_server_turn_sandbox("danger-full-access", workspace_path),
+    do: app_server_turn_sandbox("dangerFullAccess", workspace_path)
+
+  defp app_server_turn_sandbox("externalSandbox", _workspace_path) do
+    %{"type" => "externalSandbox", "networkAccess" => "enabled"}
+  end
+
+  defp app_server_turn_sandbox("external-sandbox", workspace_path),
+    do: app_server_turn_sandbox("externalSandbox", workspace_path)
 
   @spec persist_session_started(
           Path.t(),
