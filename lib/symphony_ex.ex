@@ -116,8 +116,11 @@ defmodule SymphonyEx do
           adapter: Bandit.PhoenixAdapter,
           http: [ip: ip_tuple(host), port: port],
           url: [host: host, port: port],
+          render_errors: [formats: [html: SymphonyExWeb.ErrorHTML, json: SymphonyExWeb.ErrorJSON]],
           server: true,
-          pubsub_server: SymphonyEx.PubSub
+          pubsub_server: SymphonyEx.PubSub,
+          live_view: [signing_salt: "dashboard-live-view"],
+          check_origin: false
         ]
         |> maybe_put_secret_key_base(Keyword.get(dashboard_opts, :secret_key_base))
 
