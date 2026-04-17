@@ -9,7 +9,7 @@ defmodule SymphonyExWeb.DashboardLive do
 
   use SymphonyExWeb, :live_view
 
-  alias SymphonyEx.{Dashboard, RuntimeSnapshot}
+  alias SymphonyEx.{Dashboard, RuntimeControl, RuntimeSnapshot}
 
   @default_filters %{
     "q" => "",
@@ -145,6 +145,48 @@ defmodule SymphonyExWeb.DashboardLive do
   end
 
   @impl true
+  def handle_event("save_runtime_settings", %{"runtime" => params}, socket) do
+    case RuntimeControl.apply_orchestrator_settings(params) do
+      {:ok, _result} ->
+        {:noreply,
+         socket
+         |> put_flash(:info, "Saved WORKFLOW orchestrator settings and reloaded runtime config.")
+         |> assign_snapshot(current_snapshot())}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, runtime_control_error(reason))}
+    end
+  end
+
+  @impl true
+  def handle_event("restart_component", %{"component" => component}, socket) do
+    case component_from_param(component) do
+      {:ok, component_name} ->
+        case RuntimeControl.restart_component(component_name) do
+          {:ok, :orchestrator} ->
+            {:noreply,
+             socket
+             |> put_flash(:info, "Restarted orchestrator.")
+             |> assign_snapshot(current_snapshot())}
+
+          {:ok, :endpoint} ->
+            {:noreply,
+             put_flash(
+               socket,
+               :info,
+               "Restarted dashboard endpoint. Refresh if this LiveView disconnects."
+             )}
+
+          {:error, reason} ->
+            {:noreply, put_flash(socket, :error, runtime_control_error(reason))}
+        end
+
+      :error ->
+        {:noreply, put_flash(socket, :error, "Unknown runtime component.")}
+    end
+  end
+
+  @impl true
   def handle_info({:runtime_snapshot_updated, snapshot}, socket) do
     {:noreply, assign_snapshot(socket, snapshot)}
   end
@@ -181,6 +223,14 @@ defmodule SymphonyExWeb.DashboardLive do
           and an optional full-page run detail route on top of the shared runtime snapshot.
         </p>
       </header>
+
+      <%= if message = flash_message(@flash, :info) do %>
+        <section style={flash_style(:info)}>{message}</section>
+      <% end %>
+
+      <%= if message = flash_message(@flash, :error) do %>
+        <section style={flash_style(:error)}>{message}</section>
+      <% end %>
 
       <%= if @live_action == :show && @selected_run do %>
         <section style={panel_style() <> " margin-bottom: 16px;"}>
@@ -645,6 +695,47 @@ defmodule SymphonyExWeb.DashboardLive do
             </section>
 
             <section style={panel_style()}>
+              <h2 style="margin-top: 0; font-size: 20px;">Runtime controls</h2>
+              <p style="margin: 8px 0 12px; color: #6b7280; line-height: 1.5;">
+                Update the `orchestrator` block in `WORKFLOW.md`, reload it into the live runtime,
+                or restart bounded runtime components from this dashboard.
+              </p>
+
+              <.form for={%{}} as={:runtime} phx-submit="save_runtime_settings" style="display: grid; gap: 10px;">
+                <label style={field_label_style()}>
+                  Poll interval (ms)
+                  <input type="number" min="1" name="runtime[poll_interval_ms]" value={@snapshot.settings.poll_interval_ms} style={input_style()} />
+                </label>
+
+                <label style={field_label_style()}>
+                  Max concurrent
+                  <input type="number" min="1" name="runtime[max_concurrent]" value={@snapshot.settings.max_concurrent} style={input_style()} />
+                </label>
+
+                <label style={field_label_style()}>
+                  Max retries
+                  <input type="number" min="0" name="runtime[max_retries]" value={@snapshot.settings.max_retries} style={input_style()} />
+                </label>
+
+                <label style={field_label_style()}>
+                  Retry backoff base (ms)
+                  <input type="number" min="1" name="runtime[backoff_base_ms]" value={@snapshot.settings.retry_backoff_ms} style={input_style()} />
+                </label>
+
+                <button type="submit" style={primary_button_style()}>Save settings & reload</button>
+              </.form>
+
+              <div style="display: grid; gap: 8px; margin-top: 14px;">
+                <button type="button" phx-click="restart_component" phx-value-component="orchestrator" style={secondary_button_style()}>
+                  Restart orchestrator
+                </button>
+                <button type="button" phx-click="restart_component" phx-value-component="endpoint" style={secondary_button_style()}>
+                  Restart dashboard endpoint
+                </button>
+              </div>
+            </section>
+
+            <section style={panel_style()}>
               <h2 style="margin-top: 0; font-size: 20px;">Recent tracker write-back</h2>
               <.write_back_stage_list entries={@snapshot.write_back_stages.recent} empty_message="No tracker write-back activity has been recorded yet." />
             </section>
@@ -893,6 +984,10 @@ defmodule SymphonyExWeb.DashboardLive do
 
   defp default_filters, do: @default_filters
 
+  defp component_from_param("orchestrator"), do: {:ok, :orchestrator}
+  defp component_from_param("endpoint"), do: {:ok, :endpoint}
+  defp component_from_param(_other), do: :error
+
   defp normalize_filters(params) do
     error_category = normalize_error_category(params)
 
@@ -989,6 +1084,8 @@ defmodule SymphonyExWeb.DashboardLive do
   defp page_title(:show, nil), do: "Run Detail · Symphony Dashboard"
   defp page_title(:show, identifier), do: "#{identifier} · Symphony Dashboard"
   defp page_title(_action, _identifier), do: "Symphony Dashboard"
+
+  defp flash_message(flash, kind), do: Phoenix.Flash.get(flash, kind)
 
   defp queue_visible?(filters, queue), do: filters["queue"] in ["all", queue]
 
@@ -1278,6 +1375,31 @@ defmodule SymphonyExWeb.DashboardLive do
     ]
   end
 
+  defp runtime_control_error({:invalid_setting, field, min}) do
+    "#{humanize_runtime_field(field)} must be an integer greater than or equal to #{min}."
+  end
+
+  defp runtime_control_error({:component_not_running, component}) do
+    "#{humanize_component(component)} is not running."
+  end
+
+  defp runtime_control_error(:workflow_path_unavailable),
+    do: "Runtime workflow path is unavailable."
+
+  defp runtime_control_error(%ArgumentError{} = error), do: Exception.message(error)
+  defp runtime_control_error(%RuntimeError{} = error), do: Exception.message(error)
+  defp runtime_control_error(reason), do: "Runtime control failed: #{inspect(reason)}"
+
+  defp humanize_runtime_field(:poll_interval_ms), do: "Poll interval"
+  defp humanize_runtime_field(:max_concurrent), do: "Max concurrent"
+  defp humanize_runtime_field(:max_retries), do: "Max retries"
+  defp humanize_runtime_field(:backoff_base_ms), do: "Retry backoff base"
+  defp humanize_runtime_field(field), do: to_string(field)
+
+  defp humanize_component(:orchestrator), do: "Orchestrator"
+  defp humanize_component(:endpoint), do: "Dashboard endpoint"
+  defp humanize_component(component), do: to_string(component)
+
   defp session_rows(nil), do: []
 
   defp session_rows(data) do
@@ -1413,6 +1535,22 @@ defmodule SymphonyExWeb.DashboardLive do
 
   defp action_link_style do
     "font-size: 12px; font-weight: 600; color: #2563eb; text-decoration: none;"
+  end
+
+  defp flash_style(:info) do
+    "margin-bottom: 16px; padding: 12px 14px; border-radius: 12px; border: 1px solid #bfdbfe; background: #eff6ff; color: #1d4ed8;"
+  end
+
+  defp flash_style(:error) do
+    "margin-bottom: 16px; padding: 12px 14px; border-radius: 12px; border: 1px solid #fecaca; background: #fef2f2; color: #b91c1c;"
+  end
+
+  defp primary_button_style do
+    "appearance: none; border: 0; border-radius: 10px; padding: 10px 14px; background: #111827; color: white; font-weight: 600; cursor: pointer;"
+  end
+
+  defp secondary_button_style do
+    "appearance: none; border: 1px solid #d1d5db; border-radius: 10px; padding: 10px 14px; background: white; color: #111827; font-weight: 600; cursor: pointer; text-align: left;"
   end
 
   defp dt_style, do: "font-size: 12px; color: #6b7280;"

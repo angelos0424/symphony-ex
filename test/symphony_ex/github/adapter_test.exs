@@ -31,6 +31,7 @@ defmodule SymphonyEx.Test.GitHubAdapterClientStub do
                               "options" => [
                                 %{"id" => "opt_todo", "name" => "Todo"},
                                 %{"id" => "opt_progress", "name" => "In Progress"},
+                                %{"id" => "opt_review", "name" => "In Review"},
                                 %{"id" => "opt_done", "name" => "Done"}
                               ]
                             }
@@ -58,6 +59,7 @@ defmodule SymphonyEx.Test.GitHubAdapterClientStub do
                               "options" => [
                                 %{"id" => "opt_todo", "name" => "Todo"},
                                 %{"id" => "opt_progress", "name" => "In Progress"},
+                                %{"id" => "opt_review", "name" => "In Review"},
                                 %{"id" => "opt_done", "name" => "Done"}
                               ]
                             }
@@ -130,6 +132,44 @@ defmodule SymphonyEx.GitHub.AdapterTest do
            ]
   end
 
+  test "fetch_issue_by_identifier enriches issues with blocking dependency identifiers" do
+    request_fun = fn request ->
+      case {request.method, to_string(request.url)} do
+        {:get, "https://api.github.com/repos/example/repo/issues/12"} ->
+          {:ok,
+           %Req.Response{
+             status: 200,
+             body: %{
+               "id" => 101,
+               "number" => 12,
+               "title" => "Implement tracker abstraction",
+               "body" => "Service: api\nPaths: lib/symphony_ex/orchestrator.ex",
+               "state" => "open"
+             }
+           }}
+
+        {:get, "https://api.github.com/repos/example/repo/issues/12/dependencies/blocked_by"} ->
+          {:ok,
+           %Req.Response{
+             status: 200,
+             body: [
+               %{"number" => 41, "state" => "open"},
+               %{"number" => 42, "state" => "closed"}
+             ]
+           }}
+
+        other ->
+          flunk("unexpected request: #{inspect(other)}")
+      end
+    end
+
+    opts = [api_key: "gh-token", owner: "example", repo: "repo", request_fun: request_fun]
+
+    assert {:ok, %Issue{} = issue} = Adapter.fetch_issue_by_identifier("12", opts)
+    assert issue.blocked_by_identifiers == ["41"]
+    assert issue.missing_required_fields == []
+  end
+
   test "fetches project-backed candidate issues using active status filtering" do
     opts = [
       api_key: "gh-token",
@@ -160,22 +200,88 @@ defmodule SymphonyEx.GitHub.AdapterTest do
     assert {:ok, []} = Adapter.fetch_candidate_issues(opts)
   end
 
-  test "upserts managed working record block" do
-    description = "Existing notes"
+  test "skips rerun candidates when issue body already indicates PR-created final state" do
+    request_fun = fn request ->
+      cond do
+        to_string(request.url) == "https://api.github.com/graphql" and
+            String.contains?(request.options[:json]["query"], "query ProjectItems") ->
+          {:ok,
+           %Req.Response{
+             status: 200,
+             body: %{
+               "data" => %{
+                 "organization" => %{
+                   "projectV2" => %{
+                     "id" => "PVT_123",
+                     "items" => %{
+                       "nodes" => [
+                         %{
+                           "id" => "PVTI_123",
+                           "content" => %{
+                             "number" => 14,
+                             "title" => "Issue 14",
+                             "body" =>
+                               "<!-- symphony:status -->\n## Symphony Status\n- Final status: pr_created\n- Pull request: PR #17 https://github.com/example/repo/pull/17\n<!-- /symphony:status -->"
+                           },
+                           "fieldValues" => %{
+                             "nodes" => [
+                               %{
+                                 "name" => "In Progress",
+                                 "field" => %{
+                                   "id" => "status-field",
+                                   "name" => "Status",
+                                   "options" => [
+                                     %{"id" => "opt_todo", "name" => "Todo"},
+                                     %{"id" => "opt_progress", "name" => "In Progress"},
+                                     %{"id" => "opt_review", "name" => "In Review"},
+                                     %{"id" => "opt_done", "name" => "Done"}
+                                   ]
+                                 }
+                               }
+                             ]
+                           }
+                         }
+                       ]
+                     }
+                   }
+                 },
+                 "user" => nil
+               }
+             }
+           }}
 
-    updated = Adapter.upsert_managed_working_record(description, "run status: claimed")
+        true ->
+          flunk("unexpected request: #{inspect(request.method)} #{inspect(request.url)}")
+      end
+    end
 
-    assert updated =~ "Existing notes"
-    assert updated =~ "<!-- symphony:managed -->"
-    assert updated =~ "run status: claimed"
+    opts = [
+      api_key: "gh-token",
+      owner: "example-org",
+      repo: "repo",
+      project_number: 7,
+      active_states: ["Todo", "In Progress"],
+      request_fun: request_fun
+    ]
 
-    replaced = Adapter.upsert_managed_working_record(updated, "run status: running")
+    assert {:ok, []} = Adapter.fetch_candidate_issues(opts)
+  end
+
+  test "wraps managed run record block" do
+    _description = "Existing notes"
+
+    wrapped = Adapter.managed_block("run status: claimed")
+
+    assert wrapped =~ "<!-- symphony:managed -->"
+    assert wrapped =~ "run status: claimed"
+
+    replaced = Adapter.managed_block("run status: running")
 
     assert replaced =~ "run status: running"
     refute replaced =~ "run status: claimed"
   end
 
-  test "writes run record into issue body via client-compatible request stub" do
+  test "writes run record into an issue comment via client-compatible request stub" do
     issue = %Issue{
       id: "I_kwDOA1",
       identifier: "12",
@@ -185,17 +291,13 @@ defmodule SymphonyEx.GitHub.AdapterTest do
     }
 
     request_fun = fn request ->
-      assert request.method == :patch
-      assert String.ends_with?(to_string(request.url), "/repos/example/repo/issues/12")
+      assert request.method == :post
+      assert String.ends_with?(to_string(request.url), "/repos/example/repo/issues/12/comments")
 
       body = request.options[:json][:body]
-
-      if is_binary(body) do
-        assert body =~ "issue: 12"
-        assert body =~ "status: running"
-      else
-        assert request.options[:json][:state] == "open"
-      end
+      assert body =~ "<!-- symphony:managed -->"
+      assert body =~ "issue: 12"
+      assert body =~ "status: running"
 
       {:ok, %Req.Response{status: 200, body: Map.new(request.options[:json])}}
     end
@@ -206,6 +308,70 @@ defmodule SymphonyEx.GitHub.AdapterTest do
              Adapter.write_run_record(issue, %{status: :running, attempt: 1}, opts)
 
     assert body =~ "<!-- symphony:managed -->"
+  end
+
+  test "write_run_record updates issue body summary with PR URL" do
+    issue = %Issue{
+      id: "I_kwDOA1",
+      identifier: "14",
+      title: "Title",
+      description: "Original body",
+      state: "Open"
+    }
+
+    request_fun = fn request ->
+      case {request.method, to_string(request.url)} do
+        {:post, url} ->
+          if String.ends_with?(url, "/repos/example/repo/issues/14/comments") do
+            {:ok, %Req.Response{status: 200, body: %{"body" => request.options[:json][:body]}}}
+          else
+            flunk("unexpected post #{url}")
+          end
+
+        {:get, url} ->
+          cond do
+            String.ends_with?(url, "/repos/example/repo/issues/14") ->
+              {:ok,
+               %Req.Response{status: 200, body: %{"number" => 14, "body" => "Original body"}}}
+
+            String.ends_with?(url, "/repos/example/repo/pulls") ->
+              {:ok,
+               %Req.Response{
+                 status: 200,
+                 body: [
+                   %{
+                     "number" => 17,
+                     "html_url" => "https://github.com/example/repo/pull/17",
+                     "body" => "Fixes #14",
+                     "head" => %{"ref" => "codex/issue-14-design-polish"}
+                   }
+                 ]
+               }}
+
+            true ->
+              flunk("unexpected get #{url}")
+          end
+
+        {:patch, url} ->
+          if String.ends_with?(url, "/repos/example/repo/issues/14") do
+            body = request.options[:json][:body]
+            assert body =~ "## Symphony Status"
+            assert body =~ "PR #17 https://github.com/example/repo/pull/17"
+            {:ok, %Req.Response{status: 200, body: %{"body" => body}}}
+          else
+            flunk("unexpected patch #{url}")
+          end
+      end
+    end
+
+    opts = [api_key: "gh-token", owner: "example", repo: "repo", request_fun: request_fun]
+
+    assert {:ok, _response} =
+             Adapter.write_run_record(
+               issue,
+               %{status: :released, attempt: 3, result: :success},
+               opts
+             )
   end
 
   test "maps orchestrator states to open or closed issue states" do
@@ -243,6 +409,19 @@ defmodule SymphonyEx.GitHub.AdapterTest do
       send(parent, {:github_request, request})
 
       cond do
+        request.method == :post and
+            String.contains?(to_string(request.url), "/comments") ->
+          {:ok, %Req.Response{status: 200, body: %{"body" => request.options[:json][:body]}}}
+
+        request.method == :get and
+            String.ends_with?(to_string(request.url), "/repos/example/repo/issues/12") ->
+          {:ok,
+           %Req.Response{status: 200, body: %{"number" => 99, "body" => "Latest issue body"}}}
+
+        request.method == :get and
+            String.ends_with?(to_string(request.url), "/repos/example/repo/pulls") ->
+          {:ok, %Req.Response{status: 200, body: []}}
+
         request.method == :patch and
             String.ends_with?(to_string(request.url), "/repos/example/repo/issues/12") ->
           {:ok,
@@ -304,7 +483,7 @@ defmodule SymphonyEx.GitHub.AdapterTest do
              )
 
     assert released_body =~ "result: success"
-    released_requests = collect_requests(4)
+    released_requests = collect_requests(6)
 
     assert Enum.any?(released_requests, fn request ->
              request.method == :post and
@@ -332,6 +511,10 @@ defmodule SymphonyEx.GitHub.AdapterTest do
       send(parent, {:github_request, request})
 
       cond do
+        request.method == :post and
+            String.contains?(to_string(request.url), "/comments") ->
+          {:ok, %Req.Response{status: 200, body: %{"body" => request.options[:json][:body]}}}
+
         request.method == :patch and
             String.ends_with?(to_string(request.url), "/repos/example/repo/issues/12") ->
           {:ok,
@@ -404,18 +587,24 @@ defmodule SymphonyEx.GitHub.AdapterTest do
     request_fun = fn request ->
       send(parent, {:github_request, request})
 
-      if request.method == :patch and
-           String.ends_with?(to_string(request.url), "/repos/example/repo/issues/12") and
-           is_binary(request.options[:json][:body]) do
-        {:ok,
-         %Req.Response{
-           status: 200,
-           body: %{
-             "body" => request.options[:json][:body]
-           }
-         }}
-      else
-        flunk("unexpected request: #{inspect(request.method)} #{inspect(request.url)}")
+      cond do
+        request.method == :post and
+          String.ends_with?(to_string(request.url), "/repos/example/repo/issues/12/comments") and
+            is_binary(request.options[:json][:body]) ->
+          {:ok,
+           %Req.Response{
+             status: 200,
+             body: %{
+               "body" => request.options[:json][:body]
+             }
+           }}
+
+        request.method == :get and
+            String.ends_with?(to_string(request.url), "/repos/example/repo/pulls") ->
+          {:ok, %Req.Response{status: 200, body: []}}
+
+        true ->
+          flunk("unexpected request: #{inspect(request.method)} #{inspect(request.url)}")
       end
     end
 
@@ -435,7 +624,7 @@ defmodule SymphonyEx.GitHub.AdapterTest do
 
     assert body =~ "status: running"
     requests = collect_requests(1)
-    assert [%{method: :patch}] = requests
+    assert [%{method: :post}] = requests
   end
 
   test "write_run_record merges configured assignees with existing assignees by default" do
@@ -453,18 +642,29 @@ defmodule SymphonyEx.GitHub.AdapterTest do
     request_fun = fn request ->
       send(parent, {:github_request, request})
 
-      if request.method == :patch and
-           String.ends_with?(to_string(request.url), "/repos/example/repo/issues/12") do
-        {:ok,
-         %Req.Response{
-           status: 200,
-           body: %{
-             "body" => request.options[:json][:body],
-             "assignees" => request.options[:json][:assignees]
-           }
-         }}
-      else
-        flunk("unexpected request: #{inspect(request.method)} #{inspect(request.url)}")
+      cond do
+        request.method == :post and
+            String.ends_with?(to_string(request.url), "/repos/example/repo/issues/12/comments") ->
+          {:ok,
+           %Req.Response{
+             status: 200,
+             body: %{
+               "body" => request.options[:json][:body]
+             }
+           }}
+
+        request.method == :patch and
+            String.ends_with?(to_string(request.url), "/repos/example/repo/issues/12") ->
+          {:ok,
+           %Req.Response{
+             status: 200,
+             body: %{
+               "assignees" => request.options[:json][:assignees]
+             }
+           }}
+
+        true ->
+          flunk("unexpected request: #{inspect(request.method)} #{inspect(request.url)}")
       end
     end
 
@@ -488,6 +688,109 @@ defmodule SymphonyEx.GitHub.AdapterTest do
            end)
   end
 
+  test "does not roll project status back from Done to In Progress" do
+    issue = %Issue{
+      id: "I_rollback",
+      identifier: "14",
+      title: "Title",
+      description: "",
+      state: "Open"
+    }
+
+    request_fun = fn request ->
+      cond do
+        request.method == :post and String.contains?(to_string(request.url), "/comments") ->
+          {:ok, %Req.Response{status: 200, body: %{"body" => request.options[:json][:body]}}}
+
+        request.method == :get and
+            String.ends_with?(to_string(request.url), "/repos/example/repo/issues/14") ->
+          {:ok, %Req.Response{status: 200, body: %{"number" => 14, "body" => "Original body"}}}
+
+        request.method == :get and
+            String.ends_with?(to_string(request.url), "/repos/example/repo/pulls") ->
+          {:ok, %Req.Response{status: 200, body: []}}
+
+        to_string(request.url) == "https://api.github.com/graphql" and
+            String.contains?(request.options[:json]["query"], "query ProjectItems") ->
+          {:ok,
+           %Req.Response{
+             status: 200,
+             body: %{
+               "data" => %{
+                 "organization" => %{
+                   "projectV2" => %{
+                     "id" => "PVT_x",
+                     "items" => %{
+                       "nodes" => [
+                         %{
+                           "id" => "PVTI_x",
+                           "content" => %{"number" => 14},
+                           "fieldValues" => %{
+                             "nodes" => [
+                               %{
+                                 "name" => "Done",
+                                 "field" => %{
+                                   "id" => "status-field",
+                                   "name" => "Status",
+                                   "options" => [
+                                     %{"id" => "opt_todo", "name" => "Todo"},
+                                     %{"id" => "opt_progress", "name" => "In Progress"},
+                                     %{"id" => "opt_review", "name" => "In Review"},
+                                     %{"id" => "opt_done", "name" => "Done"}
+                                   ]
+                                 }
+                               }
+                             ]
+                           }
+                         }
+                       ]
+                     }
+                   }
+                 },
+                 "user" => nil
+               }
+             }
+           }}
+
+        to_string(request.url) == "https://api.github.com/graphql" and
+            (String.contains?(request.options[:json]["query"], "mutation UpdateProjectStatus") or
+               String.contains?(
+                 request.options[:json]["query"],
+                 "mutation UpdateProjectFieldValue"
+               )) ->
+          flunk("project status should not be downgraded")
+
+        request.method == :patch and
+            String.ends_with?(to_string(request.url), "/repos/example/repo/issues/14") ->
+          {:ok,
+           %Req.Response{
+             status: 200,
+             body: %{
+               "body" => request.options[:json][:body],
+               "state" => request.options[:json][:state]
+             }
+           }}
+
+        true ->
+          {:ok, %Req.Response{status: 200, body: %{}}}
+      end
+    end
+
+    opts = [
+      api_key: "gh-token",
+      owner: "example",
+      repo: "repo",
+      project_number: 7,
+      active_states: ["In Progress", "Todo"],
+      terminal_states: ["Done"],
+      write_back: [in_progress_state_names: ["In Progress"]],
+      request_fun: request_fun
+    ]
+
+    assert {:ok, _response} =
+             Adapter.write_run_record(issue, %{status: :running, attempt: 1}, opts)
+  end
+
   test "write_run_record syncs issue/project lifecycle for in-progress and done states" do
     issue = %Issue{
       id: "I_kwDOA1",
@@ -503,6 +806,10 @@ defmodule SymphonyEx.GitHub.AdapterTest do
       send(parent, {:github_request, request})
 
       cond do
+        request.method == :post and
+            String.contains?(to_string(request.url), "/comments") ->
+          {:ok, %Req.Response{status: 200, body: %{"body" => request.options[:json][:body]}}}
+
         request.method == :patch and
             String.ends_with?(to_string(request.url), "/repos/example/repo/issues/12") ->
           {:ok,
@@ -513,6 +820,16 @@ defmodule SymphonyEx.GitHub.AdapterTest do
                "state" => request.options[:json][:state]
              }
            }}
+
+        request.method == :get and
+            String.ends_with?(to_string(request.url), "/repos/example/repo/issues/12") ->
+          {:ok,
+           %Req.Response{status: 200, body: %{"number" => 12, "body" => "Latest issue body"}}}
+
+        request.method == :get and
+            String.ends_with?(to_string(request.url), "/repos/example/repo/issues/12") ->
+          {:ok,
+           %Req.Response{status: 200, body: %{"number" => 12, "body" => "Latest issue body"}}}
 
         to_string(request.url) == "https://api.github.com/graphql" and
             String.contains?(request.options[:json]["query"], "query ProjectItems") ->
@@ -539,6 +856,7 @@ defmodule SymphonyEx.GitHub.AdapterTest do
                                    "options" => [
                                      %{"id" => "opt_todo", "name" => "Todo"},
                                      %{"id" => "opt_progress", "name" => "In Progress"},
+                                     %{"id" => "opt_review", "name" => "In Review"},
                                      %{"id" => "opt_done", "name" => "Done"}
                                    ]
                                  }
@@ -554,6 +872,10 @@ defmodule SymphonyEx.GitHub.AdapterTest do
                }
              }
            }}
+
+        request.method == :get and
+            String.ends_with?(to_string(request.url), "/repos/example/repo/pulls") ->
+          {:ok, %Req.Response{status: 200, body: []}}
 
         to_string(request.url) == "https://api.github.com/graphql" and
             (String.contains?(request.options[:json]["query"], "mutation UpdateProjectStatus") or
@@ -591,7 +913,7 @@ defmodule SymphonyEx.GitHub.AdapterTest do
     running_requests = collect_requests(3)
 
     assert Enum.any?(running_requests, fn request ->
-             request.method == :patch and is_binary(request.options[:json][:body]) and
+             request.method == :post and is_binary(request.options[:json][:body]) and
                request.options[:json][:body] =~ "status: running"
            end)
 
@@ -611,18 +933,15 @@ defmodule SymphonyEx.GitHub.AdapterTest do
              )
 
     assert released_body =~ "result: success"
-    released_requests = collect_requests(4)
+    released_requests = collect_requests(6)
 
     assert Enum.any?(released_requests, fn request ->
-             request.method == :patch and request.options[:json][:state] == "closed"
+             request.method == :get and
+               String.ends_with?(to_string(request.url), "/repos/example/repo/pulls")
            end)
 
     assert Enum.any?(released_requests, fn request ->
-             String.contains?(request.options[:json]["query"] || "", "query ProjectItems")
-           end)
-
-    assert Enum.any?(released_requests, fn request ->
-             request.options[:json]["variables"]["optionId"] == "opt_done"
+             request.options[:json]["variables"]["optionId"] == "opt_review"
            end)
   end
 
@@ -649,6 +968,10 @@ defmodule SymphonyEx.GitHub.AdapterTest do
       send(parent, {:github_request, request})
 
       cond do
+        request.method == :post and
+            String.contains?(to_string(request.url), "/comments") ->
+          {:ok, %Req.Response{status: 200, body: %{"body" => request.options[:json][:body]}}}
+
         request.method == :patch and
             String.ends_with?(to_string(request.url), "/repos/example/repo/issues/55") ->
           {:ok, %Req.Response{status: 200, body: %{"body" => request.options[:json][:body]}}}
@@ -793,6 +1116,10 @@ defmodule SymphonyEx.GitHub.AdapterTest do
       send(parent, {:github_request, request})
 
       cond do
+        request.method == :post and
+            String.contains?(to_string(request.url), "/comments") ->
+          {:ok, %Req.Response{status: 200, body: %{"body" => request.options[:json][:body]}}}
+
         request.method == :patch and
             String.ends_with?(to_string(request.url), "/repos/example/repo/issues/56") ->
           {:ok, %Req.Response{status: 200, body: %{"body" => request.options[:json][:body]}}}
@@ -927,6 +1254,14 @@ defmodule SymphonyEx.GitHub.AdapterTest do
         send(parent, {:github_request, request})
 
         cond do
+          request.method == :post and
+              String.contains?(to_string(request.url), "/comments") ->
+            {:ok, %Req.Response{status: 200, body: %{"body" => request.options[:json][:body]}}}
+
+          request.method == :get and
+              String.ends_with?(to_string(request.url), "/repos/example/repo/pulls") ->
+            {:ok, %Req.Response{status: 200, body: []}}
+
           request.method == :patch and
               String.ends_with?(to_string(request.url), "/repos/example/repo/issues/99") ->
             {:ok,
@@ -980,6 +1315,11 @@ defmodule SymphonyEx.GitHub.AdapterTest do
                }
              }}
 
+          request.method == :get and
+              String.ends_with?(to_string(request.url), "/repos/example/repo/issues/99") ->
+            {:ok,
+             %Req.Response{status: 200, body: %{"number" => 12, "body" => "Latest issue body"}}}
+
           to_string(request.url) == "https://api.github.com/graphql" and
               (String.contains?(request.options[:json]["query"], "mutation UpdateProjectStatus") or
                  String.contains?(
@@ -1017,10 +1357,10 @@ defmodule SymphonyEx.GitHub.AdapterTest do
                )
 
       assert success_body =~ "result: success"
-      success_requests = collect_requests(3)
+      success_requests = collect_requests(6)
 
       assert Enum.any?(success_requests, fn request ->
-               request.method == :patch and is_binary(request.options[:json][:body])
+               request.method == :post and is_binary(request.options[:json][:body])
              end)
 
       refute Enum.any?(success_requests, fn request ->
@@ -1042,28 +1382,28 @@ defmodule SymphonyEx.GitHub.AdapterTest do
       failed_requests = collect_requests(4)
 
       assert Enum.any?(failed_requests, fn request ->
-               request.method == :patch and request.options[:json][:state] == "closed"
+               request.method == :post and is_binary(request.options[:json][:body])
              end)
 
       assert Enum.any?(failed_requests, fn request ->
-               request.options[:json]["variables"]["optionId"] == "opt_cancelled"
+               request.method == :patch and request.options[:json][:state] == "closed"
              end)
     end
 
-    test "default lifecycle keeps backward-compatible semantics" do
+    test "default lifecycle routes successful runs into review" do
       alias SymphonyEx.Orchestrator.Lifecycle
 
       lc = Lifecycle.default()
 
       assert Lifecycle.resolve_issue_state(lc, :claimed, nil) == :open
       assert Lifecycle.resolve_issue_state(lc, :running, nil) == :open
-      assert Lifecycle.resolve_issue_state(lc, :released, :success) == :closed
+      assert Lifecycle.resolve_issue_state(lc, :released, :success) == :open
       assert Lifecycle.resolve_issue_state(lc, :released, :failed) == :open
 
       assert Lifecycle.resolve_project_status(lc, :claimed, nil) == "In Progress"
       assert Lifecycle.resolve_project_status(lc, :running, nil) == "In Progress"
       assert Lifecycle.resolve_project_status(lc, :retry_queued, nil) == "Todo"
-      assert Lifecycle.resolve_project_status(lc, :released, :success) == "Done"
+      assert Lifecycle.resolve_project_status(lc, :released, :success) == "In Review"
       assert Lifecycle.resolve_project_status(lc, :released, :failed) == "Todo"
     end
   end
@@ -1083,8 +1423,12 @@ defmodule SymphonyEx.GitHub.AdapterTest do
       send(parent, {:github_request, request})
 
       cond do
-        request.method == :patch and
-            String.ends_with?(to_string(request.url), "/repos/example/repo/issues/12") ->
+        request.method == :post and
+            String.contains?(to_string(request.url), "/comments") ->
+          {:ok, %Req.Response{status: 200, body: %{"body" => request.options[:json][:body]}}}
+
+        request.method == :post and
+            String.ends_with?(to_string(request.url), "/repos/example/repo/issues/12/comments") ->
           {:ok, %Req.Response{status: 200, body: %{"body" => request.options[:json][:body]}}}
 
         to_string(request.url) == "https://api.github.com/graphql" and
@@ -1151,18 +1495,18 @@ defmodule SymphonyEx.GitHub.AdapterTest do
 
     requests = collect_requests(4)
 
-    patch_bodies =
+    comment_bodies =
       requests
       |> Enum.filter(fn request ->
-        request.method == :patch and is_binary(request.options[:json][:body])
+        request.method == :post and is_binary(request.options[:json][:body])
       end)
       |> Enum.map(& &1.options[:json][:body])
 
-    assert Enum.count(patch_bodies) == 2
-    assert Enum.at(patch_bodies, 0) =~ "status: running"
-    assert Enum.at(patch_bodies, 1) =~ "partial_write_back: true"
-    assert Enum.at(patch_bodies, 1) =~ "partial_write_back_stage: project_status_failed"
-    assert Enum.at(patch_bodies, 1) =~ "partial_write_back_reason: :project_status_down"
+    assert Enum.count(comment_bodies) == 2
+    assert Enum.at(comment_bodies, 0) =~ "status: running"
+    assert Enum.at(comment_bodies, 1) =~ "partial_write_back: true"
+    assert Enum.at(comment_bodies, 1) =~ "partial_write_back_stage: project_status_failed"
+    assert Enum.at(comment_bodies, 1) =~ "partial_write_back_reason: :project_status_down"
   end
 
   test "write_run_record emits stage telemetry for successful sync" do
@@ -1194,6 +1538,10 @@ defmodule SymphonyEx.GitHub.AdapterTest do
 
     request_fun = fn request ->
       cond do
+        request.method == :post and
+            String.contains?(to_string(request.url), "/comments") ->
+          {:ok, %Req.Response{status: 200, body: %{"body" => request.options[:json][:body]}}}
+
         request.method == :patch and
             String.ends_with?(to_string(request.url), "/repos/example/repo/issues/12") ->
           {:ok, %Req.Response{status: 200, body: %{"body" => request.options[:json][:body]}}}
@@ -1240,7 +1588,11 @@ defmodule SymphonyEx.GitHub.AdapterTest do
 
         to_string(request.url) == "https://api.github.com/graphql" and
             String.contains?(request.options[:json]["query"], "mutation UpdateProject") ->
-          {:ok, %Req.Response{status: 200, body: %{"data" => %{"updateProjectV2ItemFieldValue" => %{}}}}}
+          {:ok,
+           %Req.Response{
+             status: 200,
+             body: %{"data" => %{"updateProjectV2ItemFieldValue" => %{}}}
+           }}
 
         true ->
           {:ok, %Req.Response{status: 200, body: %{}}}
@@ -1300,6 +1652,10 @@ defmodule SymphonyEx.GitHub.AdapterTest do
 
     request_fun = fn request ->
       cond do
+        request.method == :post and
+            String.contains?(to_string(request.url), "/comments") ->
+          {:ok, %Req.Response{status: 200, body: %{"body" => request.options[:json][:body]}}}
+
         request.method == :patch and
             String.ends_with?(to_string(request.url), "/repos/example/repo/issues/12") ->
           {:ok, %Req.Response{status: 200, body: %{"body" => request.options[:json][:body]}}}
@@ -1379,12 +1735,20 @@ defmodule SymphonyEx.GitHub.AdapterTest do
                     %{stage: :essential, outcome: :success, tracker_kind: :github}}
 
     assert_receive {:telemetry_event, [:symphony_ex, :write_back, :stage], _measurements,
-                    %{stage: :optional, outcome: :partial, failed_stage: :label_sync_failed,
-                      tracker_kind: :github}}
+                    %{
+                      stage: :optional,
+                      outcome: :partial,
+                      failed_stage: :label_sync_failed,
+                      tracker_kind: :github
+                    }}
 
     assert_receive {:telemetry_event, [:symphony_ex, :write_back, :stage], _measurements,
-                    %{stage: :annotation, outcome: :success, failed_stage: :label_sync_failed,
-                      tracker_kind: :github}}
+                    %{
+                      stage: :annotation,
+                      outcome: :success,
+                      failed_stage: :label_sync_failed,
+                      tracker_kind: :github
+                    }}
   end
 
   defp collect_requests(count, acc \\ [])

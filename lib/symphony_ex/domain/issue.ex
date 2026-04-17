@@ -16,6 +16,8 @@ defmodule SymphonyEx.Domain.Issue do
           labels: [String.t()],
           assignees: [String.t()],
           conflict_hints: [String.t()],
+          missing_required_fields: [atom()],
+          blocked_by_identifiers: [String.t()],
           parent_id: String.t() | nil,
           children_ids: [String.t()]
         }
@@ -33,6 +35,8 @@ defmodule SymphonyEx.Domain.Issue do
     labels: [],
     assignees: [],
     conflict_hints: [],
+    missing_required_fields: [],
+    blocked_by_identifiers: [],
     children_ids: []
   ]
 end

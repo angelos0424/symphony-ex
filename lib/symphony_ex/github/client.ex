@@ -61,6 +61,24 @@ defmodule SymphonyEx.GitHub.Client do
     rest(:get, "/repos/#{owner}/#{repo}/issues/#{issue_number}/comments", opts)
   end
 
+  @spec fetch_issue_blocked_by(String.t() | pos_integer(), keyword()) ::
+          {:ok, [issue_map()]} | {:error, term()}
+  def fetch_issue_blocked_by(number_or_identifier, opts) do
+    owner = Keyword.fetch!(opts, :owner)
+    repo = Keyword.fetch!(opts, :repo)
+    issue_number = normalize_issue_number(number_or_identifier)
+
+    case rest(
+           :get,
+           "/repos/#{owner}/#{repo}/issues/#{issue_number}/dependencies/blocked_by",
+           opts
+         ) do
+      {:ok, issues} when is_list(issues) -> {:ok, issues}
+      {:error, {:http_error, status, _body}} when status in [404, 410] -> {:ok, []}
+      {:error, _reason} = error -> error
+    end
+  end
+
   @spec create_issue_comment(String.t() | pos_integer(), String.t(), keyword()) ::
           {:ok, map()} | {:error, term()}
   def create_issue_comment(number_or_identifier, body, opts) do
@@ -71,6 +89,14 @@ defmodule SymphonyEx.GitHub.Client do
     rest(:post, "/repos/#{owner}/#{repo}/issues/#{issue_number}/comments", opts,
       json: %{body: body}
     )
+  end
+
+  @spec list_pull_requests(keyword()) :: {:ok, [map()]} | {:error, term()}
+  def list_pull_requests(opts) do
+    owner = Keyword.fetch!(opts, :owner)
+    repo = Keyword.fetch!(opts, :repo)
+
+    rest(:get, "/repos/#{owner}/#{repo}/pulls", opts, query: [state: "all", per_page: 100])
   end
 
   @spec update_issue_body(String.t() | pos_integer(), String.t(), keyword()) ::
@@ -640,8 +666,11 @@ defmodule SymphonyEx.GitHub.Client do
           %{"errors" => [_ | _] = errors} ->
             {:error, {:graphql_errors, errors}}
 
-          %{"data" => data} when is_map(data) -> {:ok, data}
-          other -> {:error, {:unexpected_body, other}}
+          %{"data" => data} when is_map(data) ->
+            {:ok, data}
+
+          other ->
+            {:error, {:unexpected_body, other}}
         end
 
       {:error, _reason} = error ->

@@ -76,6 +76,7 @@ defmodule SymphonyEx.Config.Schema do
                   keys: [
                     enabled: [type: :boolean, default: true],
                     in_progress_state_names: [type: {:list, :string}, default: ["In Progress"]],
+                    review_state_names: [type: {:list, :string}, default: ["In Review"]],
                     labels: [type: {:list, :string}, default: []],
                     assignees: [type: {:list, :string}, default: []],
                     assignee_mode: [

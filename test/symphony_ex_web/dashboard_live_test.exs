@@ -56,7 +56,11 @@ defmodule SymphonyExWeb.DashboardLiveTest do
   setup do
     Observability.reset()
     Observability.record_rate_limit(:github, %{remaining: 4321, limit: 5000, reset: "1775174400"})
-    Observability.record_write_back_stage("SYM-1", :github, :essential, :success, %{status: :running})
+
+    Observability.record_write_back_stage("SYM-1", :github, :essential, :success, %{
+      status: :running
+    })
+
     Observability.record_write_back_stage("SYM-0", :github, :optional, :partial, %{
       failed_stage: :label_sync_failed,
       reason: "labels_down"
@@ -224,6 +228,10 @@ defmodule SymphonyExWeb.DashboardLiveTest do
     assert html =~ "GitHub rate limit"
     assert html =~ "4321/5000"
     assert html =~ "Orchestrator settings"
+    assert html =~ "Runtime controls"
+    assert html =~ "Save settings &amp; reload"
+    assert html =~ "Restart orchestrator"
+    assert html =~ "Restart dashboard endpoint"
     assert html =~ "Recent tracker write-back"
     assert html =~ "SYM-1"
     assert html =~ "SYM-2"

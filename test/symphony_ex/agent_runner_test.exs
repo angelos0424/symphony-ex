@@ -173,6 +173,103 @@ defmodule SymphonyEx.AgentRunnerTest do
     end
   end
 
+  defmodule SessionLogAppServer do
+    use Agent
+
+    def start_link(opts) do
+      Agent.start_link(fn ->
+        %{
+          opts: opts,
+          events: [],
+          capabilities: %{supports_thread_reuse: true, supports_events: true}
+        }
+      end)
+    end
+
+    def subscribe(_server, _pid \\ self()), do: :ok
+
+    def initialize(_server) do
+      {:ok, %{"supportsThreadReuse" => true, "supportsEvents" => true}}
+    end
+
+    def capabilities(server), do: Agent.get(server, & &1.capabilities)
+    def start_thread(_server, _params), do: {:ok, %{"threadId" => "thread-session-log"}}
+
+    def start_turn(server, params) do
+      session_log_path = Application.fetch_env!(:symphony_ex, :agent_runner_test_session_log_path)
+
+      thread_started = %Events{
+        event: :notification,
+        timestamp: DateTime.utc_now() |> DateTime.to_iso8601(),
+        raw_method: "thread/started",
+        params: %{"thread" => %{"path" => session_log_path}}
+      }
+
+      turn_completed = %Events{
+        event: :turn_completed,
+        timestamp: DateTime.utc_now() |> DateTime.to_iso8601(),
+        raw_method: "turn.completed",
+        message: "done",
+        params: %{"turnId" => "turn-session-log", "cwd" => params["cwd"]},
+        usage: %{input_tokens: 1, output_tokens: 1, total_tokens: 2}
+      }
+
+      Agent.update(server, fn state -> %{state | events: [turn_completed, thread_started]} end)
+      send(self(), {:app_server_event, turn_completed})
+      {:ok, %{"turnId" => "turn-session-log"}}
+    end
+
+    def get_events(server), do: Agent.get(server, & &1.events)
+    def alive?(_server), do: true
+    def cancel_turn(_server), do: :ok
+    def shutdown(server), do: Agent.stop(server, :normal, 1_000)
+  end
+
+  defmodule BlockedAppServer do
+    use Agent
+
+    alias SymphonyEx.Domain.Events
+
+    def start_link(_opts) do
+      Agent.start_link(fn -> %{events: [], subscriber: nil} end)
+    end
+
+    def subscribe(server, pid \\ self()) do
+      Agent.update(server, &Map.put(&1, :subscriber, pid))
+      :ok
+    end
+
+    def initialize(_server), do: {:ok, %{}}
+    def capabilities(_server), do: %{}
+    def start_thread(_server, _params), do: {:ok, %{"threadId" => "thread-blocked"}}
+    def alive?(_server), do: true
+    def cancel_turn(_server), do: :ok
+    def shutdown(server), do: Agent.stop(server, :normal, 1_000)
+
+    def start_turn(server, _params) do
+      blocked_message =
+        "STATUS: BLOCKED\nThe required browser runtime dependency libatk-1.0.so.0 is missing. This requires a gstack-aware environment."
+
+      turn_completed = %Events{
+        event: :turn_completed,
+        timestamp: DateTime.utc_now() |> DateTime.to_iso8601(),
+        raw_method: "turn.completed",
+        message: blocked_message,
+        params: %{"turnId" => "turn-blocked"}
+      }
+
+      Agent.update(server, fn state -> %{state | events: [turn_completed]} end)
+
+      if subscriber = Agent.get(server, & &1.subscriber) do
+        send(subscriber, {:app_server_event, turn_completed})
+      end
+
+      {:ok, %{"turnId" => "turn-blocked"}}
+    end
+
+    def get_events(server), do: Agent.get(server, & &1.events)
+  end
+
   test "reuses recoverable thread metadata and clears session file on success" do
     workspace_path = tmp_workspace("recovery-success")
     workflow_path = write_workflow(workspace_path)
@@ -375,6 +472,189 @@ defmodule SymphonyEx.AgentRunnerTest do
     assert is_list(turn_params["input"])
     assert [%{"type" => "text", "text" => _prompt}] = turn_params["input"]
     assert turn_params["sandboxPolicy"] == %{"type" => "dangerFullAccess"}
+  end
+
+  test "reclassifies blocked completion as failed" do
+    workspace_path = tmp_workspace("blocked-result")
+    workflow_path = write_workflow(workspace_path)
+    issue = issue_fixture("SYM-309")
+
+    result =
+      AgentRunner.run(issue,
+        workspace_path: workspace_path,
+        workflow_path: workflow_path,
+        codex: [command: "codex app-server"],
+        app_server: BlockedAppServer
+      )
+
+    assert result.status == :failed
+    assert result.error_category == "blocked"
+    assert result.error =~ "blocked outcome"
+
+    {:ok, session} = SessionStore.load(workspace_path)
+    assert session.phase == :failed
+    assert session.error_category == "blocked"
+  end
+
+  test "fails success verification when issue body update was required but not performed" do
+    workspace_path = tmp_workspace("required-body-update")
+    workflow_path = write_workflow(workspace_path)
+    issue = %Issue{issue_fixture("SYM-310") | description: "이슈 본문에 업데이트"}
+
+    Application.put_env(:symphony_ex, :agent_runner_issue_body_fetcher, fn _issue ->
+      {:ok, issue.description}
+    end)
+
+    Application.put_env(:symphony_ex, :agent_runner_issue_pr_fetcher, fn _issue ->
+      {:ok, []}
+    end)
+
+    on_exit(fn ->
+      Application.delete_env(:symphony_ex, :agent_runner_issue_body_fetcher)
+      Application.delete_env(:symphony_ex, :agent_runner_issue_pr_fetcher)
+    end)
+
+    result =
+      AgentRunner.run(issue,
+        workspace_path: workspace_path,
+        workflow_path: workflow_path,
+        codex: [command: "codex app-server"],
+        app_server: MockAppServer
+      )
+
+    assert result.status == :failed
+    assert result.error_category == "required_output_missing"
+    assert result.error =~ "body update"
+
+    {:ok, session} = SessionStore.load(workspace_path)
+    assert session.phase == :failed
+    assert session.error_category == "required_output_missing"
+  end
+
+  test "accepts success verification when a linked PR exists even if body text is unchanged" do
+    workspace_path = tmp_workspace("required-body-pr")
+    workflow_path = write_workflow(workspace_path)
+    issue = %Issue{issue_fixture("SYM-311") | description: "이슈 본문에 업데이트"}
+
+    Application.put_env(:symphony_ex, :agent_runner_issue_body_fetcher, fn _issue ->
+      {:ok, issue.description}
+    end)
+
+    Application.put_env(:symphony_ex, :agent_runner_issue_pr_fetcher, fn _issue ->
+      {:ok, [%{"body" => "Fixes #SYM-311", "headRefName" => "codex/issue-SYM-311-branch"}]}
+    end)
+
+    on_exit(fn ->
+      Application.delete_env(:symphony_ex, :agent_runner_issue_body_fetcher)
+      Application.delete_env(:symphony_ex, :agent_runner_issue_pr_fetcher)
+    end)
+
+    result =
+      AgentRunner.run(issue,
+        workspace_path: workspace_path,
+        workflow_path: workflow_path,
+        codex: [command: "codex app-server"],
+        app_server: MockAppServer
+      )
+
+    assert result.status == :success
+  end
+
+  test "fails before startup when a referenced gstack skill is missing" do
+    workspace_path = tmp_workspace("missing-skill")
+    workflow_path = write_workflow(workspace_path)
+
+    previous_gstack_root = System.get_env("GSTACK_ROOT")
+    System.put_env("GSTACK_ROOT", Path.join(workspace_path, "missing-gstack-root"))
+
+    on_exit(fn ->
+      if previous_gstack_root do
+        System.put_env("GSTACK_ROOT", previous_gstack_root)
+      else
+        System.delete_env("GSTACK_ROOT")
+      end
+    end)
+
+    issue = %Issue{issue_fixture("SYM-308") | description: "$gstack-not-installed 실행"}
+
+    result =
+      AgentRunner.run(issue,
+        workspace_path: workspace_path,
+        workflow_path: workflow_path,
+        codex: [command: "codex app-server"]
+      )
+
+    assert result.status == :failed
+    assert result.error_category == "missing_skill_reference"
+    assert result.error =~ "Referenced skill $gstack-not-installed is not installed"
+
+    {:ok, session} = SessionStore.load(workspace_path)
+    assert session.phase == :failed
+    assert session.error_category == "missing_skill_reference"
+  end
+
+  test "reclassifies turn completion as failed when the codex session log records a fatal tool error" do
+    workspace_path = tmp_workspace("tool-failure-session-log")
+    workflow_path = write_workflow(workspace_path)
+    issue = issue_fixture("SYM-307")
+    session_log_path = Path.join(workspace_path, "codex-session.jsonl")
+
+    File.mkdir_p!(workspace_path)
+
+    File.write!(
+      session_log_path,
+      Enum.join(
+        [
+          Jason.encode!(%{
+            "type" => "event_msg",
+            "payload" => %{"type" => "task_started", "turn_id" => "turn-session-log"}
+          }),
+          Jason.encode!(%{
+            "type" => "response_item",
+            "payload" => %{
+              "type" => "function_call_output",
+              "output" =>
+                "write_stdin failed: stdin is closed for this session; rerun exec_command with tty=true to keep stdin open"
+            }
+          }),
+          Jason.encode!(%{
+            "type" => "event_msg",
+            "payload" => %{"type" => "task_complete", "turn_id" => "turn-session-log"}
+          })
+        ],
+        "\n"
+      ) <> "\n"
+    )
+
+    Application.put_env(:symphony_ex, :agent_runner_test_session_log_path, session_log_path)
+
+    on_exit(fn ->
+      Application.delete_env(:symphony_ex, :agent_runner_test_session_log_path)
+    end)
+
+    result =
+      AgentRunner.run(issue,
+        workspace_path: workspace_path,
+        workflow_path: workflow_path,
+        codex: [command: "mock-codex"],
+        app_server: SessionLogAppServer
+      )
+
+    assert result.status == :failed
+    assert result.error_category == "tool_execution_failed"
+    assert result.error =~ "write_stdin failed"
+
+    assert {:ok, session} = SessionStore.load(workspace_path)
+    assert session.phase == :failed
+    assert session.error_category == "tool_execution_failed"
+
+    [run_finished | _] =
+      workspace_path
+      |> read_events!()
+      |> Enum.filter(&(&1["event"] == "run_finished"))
+
+    assert run_finished["status"] == "failed"
+    assert run_finished["error_category"] == "tool_execution_failed"
   end
 
   defp issue_fixture(identifier) do

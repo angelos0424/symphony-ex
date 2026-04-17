@@ -7,7 +7,24 @@ defmodule SymphonyEx.AgentRunner do
 
   alias SymphonyEx.Codex.AppServer
   alias SymphonyEx.Domain.{Events, Issue}
+  alias SymphonyEx.GitHub.Client
   alias SymphonyEx.{Logging, PromptBuilder, RunEventLogger, SessionStore, Telemetry}
+
+  @fatal_tool_failure_patterns [
+    "write_stdin failed: stdin is closed for this session",
+    "stdin is closed for this session"
+  ]
+
+  @blocked_result_patterns [
+    ~r/\bSTATUS:\s*BLOCKED\b/i,
+    ~r/\bBLOCKED:\b/i,
+    ~r/\bunable to complete\b/i,
+    ~r/\bcannot complete\b/i,
+    ~r/\bcould not complete\b/i,
+    ~r/\brequires a gstack-aware environment\b/i,
+    ~r/\bmissing shared libraries\b/i,
+    ~r/libatk-1\.0\.so\.0/i
+  ]
 
   @type run_result :: %{
           thread_id: String.t() | nil,
@@ -57,32 +74,34 @@ defmodule SymphonyEx.AgentRunner do
             workspace_path: workspace_path
           })
 
-        # Build prompt
-        prompt =
-          PromptBuilder.build(workflow_path, issue,
-            comments: comments,
-            context_docs: context_docs,
-            workflow_store: Keyword.get(opts, :workflow_store, SymphonyEx.WorkflowStore)
-          )
+        case PromptBuilder.build(workflow_path, issue,
+               comments: comments,
+               context_docs: context_docs,
+               workflow_store: Keyword.get(opts, :workflow_store, SymphonyEx.WorkflowStore),
+               workspace_path: workspace_path
+             ) do
+          {:ok, prompt} ->
+            {:ok, server} = app_server.start_link(command: command, cwd: workspace_path)
+            app_server.subscribe(server)
 
-        # Spawn app-server
-        {:ok, server} = app_server.start_link(command: command, cwd: workspace_path)
-        app_server.subscribe(server)
+            try do
+              run_session(
+                app_server,
+                server,
+                prompt,
+                issue,
+                workspace_path,
+                codex_config,
+                turn_timeout,
+                stall_timeout,
+                recovered_session
+              )
+            after
+              app_server.shutdown(server)
+            end
 
-        try do
-          run_session(
-            app_server,
-            server,
-            prompt,
-            issue,
-            workspace_path,
-            codex_config,
-            turn_timeout,
-            stall_timeout,
-            recovered_session
-          )
-        after
-          app_server.shutdown(server)
+          {:error, reason} ->
+            build_prestart_failure(issue, workspace_path, recovered_session, reason)
         end
       end
     )
@@ -305,8 +324,9 @@ defmodule SymphonyEx.AgentRunner do
             case event.event do
               :turn_completed ->
                 elapsed = System.monotonic_time(:millisecond) - (ctx.deadline - ctx.stall_timeout)
-                Telemetry.emit_turn_completed(ctx.issue.identifier, elapsed, :success)
-                build_result(ctx, :success, nil, nil)
+                result = build_result(ctx, :success, nil, nil)
+                Telemetry.emit_turn_completed(ctx.issue.identifier, elapsed, result.status)
+                result
 
               :turn_failed ->
                 Telemetry.emit_turn_completed(ctx.issue.identifier, nil, :failed)
@@ -342,19 +362,21 @@ defmodule SymphonyEx.AgentRunner do
     last_event = extract_last_event_name(events)
     turn_id = extract_last_turn_id(events) || session.turn_id
 
-    result = %{
-      thread_id: ctx.thread_id,
-      turn_id: turn_id,
-      session_id: session.session_id,
-      recovery_count: session.recovery_count,
-      events: events,
-      status: status,
-      error: error,
-      error_category: error_category,
-      last_message: last_message,
-      last_event: last_event,
-      elapsed_ms: elapsed_ms
-    }
+    result =
+      %{
+        thread_id: ctx.thread_id,
+        turn_id: turn_id,
+        session_id: session.session_id,
+        recovery_count: session.recovery_count,
+        events: events,
+        status: status,
+        error: error,
+        error_category: error_category,
+        last_message: last_message,
+        last_event: last_event,
+        elapsed_ms: elapsed_ms
+      }
+      |> validate_success_result(events, ctx.issue)
 
     persist_terminal_session(
       ctx.workspace_path,
@@ -364,7 +386,7 @@ defmodule SymphonyEx.AgentRunner do
       result
     )
 
-    outcome_kind = Logging.outcome_kind(status, error)
+    outcome_kind = Logging.outcome_kind(result.status, result.error)
 
     Logger.info(
       "agent run finished",
@@ -376,7 +398,7 @@ defmodule SymphonyEx.AgentRunner do
           session_id: session.session_id,
           elapsed_ms: elapsed_ms,
           outcome_kind: outcome_kind,
-          error_category: error_category,
+          error_category: result.error_category,
           recovered: session.recovery_count > 0,
           recovery_count: session.recovery_count,
           last_event: last_event
@@ -389,22 +411,92 @@ defmodule SymphonyEx.AgentRunner do
         thread_id: ctx.thread_id,
         turn_id: turn_id,
         session_id: session.session_id,
-        status: Atom.to_string(status),
+        status: Atom.to_string(result.status),
         outcome_kind: outcome_kind,
         elapsed_ms: elapsed_ms,
         recovered: session.recovery_count > 0,
         recovery_count: session.recovery_count,
-        error: error,
-        error_category: error_category,
-        last_message: last_message,
+        error: result.error,
+        error_category: result.error_category,
+        last_message: result.last_message,
         last_event: last_event,
         usage: extract_last_usage(events)
       })
 
-    Telemetry.emit_run_finished(ctx.issue.identifier, status, elapsed_ms)
+    Telemetry.emit_run_finished(ctx.issue.identifier, result.status, elapsed_ms)
 
     result
   end
+
+  @spec build_prestart_failure(Issue.t(), Path.t(), SessionStore.session_data() | nil, term()) ::
+          run_result()
+  defp build_prestart_failure(issue, workspace_path, recovered_session, reason) do
+    {error, error_category} = classify_prestart_failure(reason)
+
+    Logger.error(
+      "agent prompt build failed",
+      Logging.logger_metadata(
+        Logging.issue_metadata(issue)
+        |> Map.merge(%{
+          workspace_path: workspace_path,
+          error: error,
+          error_category: error_category,
+          recovered: not is_nil(recovered_session),
+          recovery_count: recovery_count(recovered_session)
+        })
+      )
+    )
+
+    result = %{
+      thread_id: recovered_thread_id(recovered_session),
+      turn_id: nil,
+      session_id: recovered_session && recovered_session.session_id,
+      recovery_count: recovery_count(recovered_session),
+      events: [],
+      status: :failed,
+      error: error,
+      error_category: error_category,
+      last_message: nil,
+      last_event: nil,
+      elapsed_ms: nil
+    }
+
+    persist_failed_session(
+      workspace_path,
+      issue,
+      %{},
+      recovered_session,
+      result.thread_id,
+      result.error,
+      result.error_category,
+      nil
+    )
+
+    :ok =
+      RunEventLogger.log_run_finished(workspace_path, issue, %{
+        thread_id: result.thread_id,
+        status: Atom.to_string(result.status),
+        error: result.error,
+        error_category: result.error_category,
+        phase: "startup_failed"
+      })
+
+    result
+  end
+
+  @spec classify_prestart_failure(term()) :: {String.t(), String.t()}
+  defp classify_prestart_failure({:missing_skill_reference, name, paths}) do
+    expected = Enum.map_join(paths, ", ", &to_string/1)
+
+    {"Referenced skill $#{name} is not installed. Expected one of: #{expected}",
+     "missing_skill_reference"}
+  end
+
+  defp classify_prestart_failure({:missing_external_reference, name}) do
+    {"Referenced command $#{name} is not installed or not on PATH", "missing_external_reference"}
+  end
+
+  defp classify_prestart_failure(reason), do: {inspect(reason), "startup_failed"}
 
   @spec extract_last_message([Events.t()]) :: String.t() | nil
   defp extract_last_message(events) do
@@ -433,6 +525,270 @@ defmodule SymphonyEx.AgentRunner do
       %Events{params: %{} = params} -> params["turnId"] || params["turn_id"]
       _ -> nil
     end)
+  end
+
+  @spec validate_success_result(run_result(), [Events.t()], Issue.t()) :: run_result()
+  defp validate_success_result(%{status: :success} = result, events, issue) do
+    case blocked_result_message(result, events) do
+      {:blocked, message} ->
+        %{
+          result
+          | status: :failed,
+            error: message,
+            error_category: "blocked",
+            last_message: result.last_message || message
+        }
+
+      nil ->
+        with :ok <- verify_required_outputs(issue),
+             thread_log_path when is_binary(thread_log_path) <- extract_thread_log_path(events),
+             turn_id when is_binary(turn_id) <- result.turn_id,
+             {:error, message, category} <- detect_fatal_tool_failure(thread_log_path, turn_id) do
+          %{
+            result
+            | status: :failed,
+              error: message,
+              error_category: category,
+              last_message: result.last_message || message
+          }
+        else
+          {:error, message, category} ->
+            %{
+              result
+              | status: :failed,
+                error: message,
+                error_category: category,
+                last_message: result.last_message || message
+            }
+
+          _ ->
+            result
+        end
+    end
+  end
+
+  defp validate_success_result(result, _events, _issue), do: result
+
+  @spec extract_thread_log_path([Events.t()]) :: String.t() | nil
+  defp extract_thread_log_path(events) do
+    Enum.find_value(events, fn
+      %Events{params: %{"thread" => %{"path" => path}}} when is_binary(path) -> path
+      %Events{params: %{"threadPath" => path}} when is_binary(path) -> path
+      _ -> nil
+    end)
+  end
+
+  @spec detect_fatal_tool_failure(Path.t(), String.t()) :: :ok | {:error, String.t(), String.t()}
+  defp detect_fatal_tool_failure(log_path, turn_id) do
+    if File.regular?(log_path) do
+      log_path
+      |> File.stream!([], :line)
+      |> Enum.reduce_while({false, :ok}, fn line, {capturing?, _status} ->
+        case Jason.decode(line) do
+          {:ok,
+           %{
+             "type" => "event_msg",
+             "payload" => %{"type" => "task_started", "turn_id" => ^turn_id}
+           }} ->
+            {:cont, {true, :ok}}
+
+          {:ok,
+           %{
+             "type" => "event_msg",
+             "payload" => %{"type" => "task_complete", "turn_id" => ^turn_id}
+           }} ->
+            {:halt, {false, :ok}}
+
+          {:ok, entry} when capturing? ->
+            case fatal_tool_failure_entry(entry) do
+              nil -> {:cont, {true, :ok}}
+              {message, category} -> {:halt, {true, {:error, message, category}}}
+            end
+
+          _ ->
+            {:cont, {capturing?, :ok}}
+        end
+      end)
+      |> elem(1)
+    else
+      :ok
+    end
+  end
+
+  @spec fatal_tool_failure_entry(map()) :: {String.t(), String.t()} | nil
+  defp fatal_tool_failure_entry(%{
+         "type" => "response_item",
+         "payload" => %{"type" => "function_call_output", "output" => output}
+       })
+       when is_binary(output) do
+    fatal_tool_failure(output)
+  end
+
+  defp fatal_tool_failure_entry(%{
+         "type" => "event_msg",
+         "payload" => %{"type" => "exec_command_end", "aggregated_output" => output}
+       })
+       when is_binary(output) do
+    fatal_tool_failure(output)
+  end
+
+  defp fatal_tool_failure_entry(_entry), do: nil
+
+  @spec fatal_tool_failure(String.t()) :: {String.t(), String.t()} | nil
+  defp fatal_tool_failure(output) do
+    if Enum.any?(@fatal_tool_failure_patterns, &String.contains?(output, &1)) do
+      {String.trim(output), "tool_execution_failed"}
+    end
+  end
+
+  @spec verify_required_outputs(Issue.t()) :: :ok | {:error, String.t(), String.t()}
+  defp verify_required_outputs(%Issue{} = issue) do
+    if issue_requires_body_update?(issue) do
+      case issue_body_updated_or_pr_created?(issue) do
+        {:ok, true} ->
+          :ok
+
+        {:ok, false} ->
+          {:error,
+           "Issue required a body update, but neither the GitHub issue body nor a linked PR reflected the final state",
+           "required_output_missing"}
+
+        {:error, reason} ->
+          {:error, "Issue required a body update, but verification failed: #{inspect(reason)}",
+           "required_output_unverified"}
+      end
+    else
+      :ok
+    end
+  end
+
+  @spec issue_requires_body_update?(Issue.t()) :: boolean()
+  defp issue_requires_body_update?(%Issue{description: description})
+       when is_binary(description) do
+    String.match?(description, ~r/이슈\s*본문.*업데이트|issue\s+body|update\s+the\s+issue\s+body/i)
+  end
+
+  defp issue_requires_body_update?(_issue), do: false
+
+  @spec issue_body_updated_or_pr_created?(Issue.t()) :: {:ok, boolean()} | {:error, term()}
+  defp issue_body_updated_or_pr_created?(%Issue{} = issue) do
+    fetcher =
+      Application.get_env(
+        :symphony_ex,
+        :agent_runner_issue_body_fetcher,
+        &default_fetch_issue_body/1
+      )
+
+    pr_fetcher =
+      Application.get_env(
+        :symphony_ex,
+        :agent_runner_issue_pr_fetcher,
+        &default_fetch_issue_prs/1
+      )
+
+    with {:ok, latest_body} <- fetcher.(issue),
+         {:ok, prs} <- pr_fetcher.(issue) do
+      body_updated =
+        normalize_issue_body(latest_body) != normalize_issue_body(issue.description || "")
+
+      {:ok, body_updated or pr_exists_for_issue?(issue, prs)}
+    end
+  end
+
+  @spec default_fetch_issue_body(Issue.t()) :: {:ok, String.t()} | {:error, term()}
+  defp default_fetch_issue_body(%Issue{} = issue) do
+    case Client.fetch_issue(issue.identifier, github_client_opts()) do
+      {:ok, %{} = latest_issue} -> {:ok, latest_issue["body"] || ""}
+      {:ok, nil} -> {:error, :issue_not_found}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @spec default_fetch_issue_prs(Issue.t()) :: {:ok, [map()]} | {:error, term()}
+  defp default_fetch_issue_prs(%Issue{} = _issue) do
+    Client.list_pull_requests(github_client_opts())
+  end
+
+  @spec pr_exists_for_issue?(Issue.t(), [map()]) :: boolean()
+  defp pr_exists_for_issue?(%Issue{} = issue, prs) do
+    issue_number = to_string(issue.identifier)
+
+    Enum.any?(prs, fn pr ->
+      body = pr["body"] || ""
+      head_ref = get_in(pr, ["head", "ref"]) || pr["headRefName"] || ""
+
+      String.contains?(body, "##{issue_number}") or
+        String.contains?(head_ref, "issue-#{issue_number}")
+    end)
+  end
+
+  @spec github_client_opts() :: keyword()
+  defp github_client_opts do
+    [
+      api_key: System.get_env("GITHUB_TOKEN"),
+      owner: System.get_env("GITHUB_OWNER"),
+      repo: System.get_env("GITHUB_REPO")
+    ]
+  end
+
+  @spec normalize_issue_body(String.t()) :: String.t()
+  defp normalize_issue_body(body) do
+    body
+    |> String.replace(~r/<!-- symphony:managed -->.*?<!-- \/symphony:managed -->/s, "")
+    |> String.trim()
+  end
+
+  @spec blocked_result_message(run_result(), [Events.t()]) :: {:blocked, String.t()} | nil
+  defp blocked_result_message(result, events) do
+    messages =
+      [result.error, result.last_message]
+      |> Kernel.++(Enum.flat_map(events, &event_messages/1))
+      |> Enum.filter(&(is_binary(&1) and String.trim(&1) != ""))
+
+    Enum.find_value(messages, fn message ->
+      if blocked_message?(message) do
+        {:blocked, blocked_message_summary(message)}
+      end
+    end)
+  end
+
+  @spec event_messages(Events.t()) :: [String.t()]
+  defp event_messages(%Events{message: message, params: params}) do
+    [message | nested_event_messages(params)]
+  end
+
+  @spec nested_event_messages(term()) :: [String.t()]
+  defp nested_event_messages(value) when is_binary(value), do: [value]
+
+  defp nested_event_messages(value) when is_list(value) do
+    Enum.flat_map(value, &nested_event_messages/1)
+  end
+
+  defp nested_event_messages(value) when is_map(value) do
+    value
+    |> Map.values()
+    |> Enum.flat_map(&nested_event_messages/1)
+  end
+
+  defp nested_event_messages(_value), do: []
+
+  @spec blocked_message?(String.t()) :: boolean()
+  defp blocked_message?(message) do
+    Enum.any?(@blocked_result_patterns, &Regex.match?(&1, message))
+  end
+
+  @spec blocked_message_summary(String.t()) :: String.t()
+  defp blocked_message_summary(message) do
+    cond do
+      Regex.match?(~r/libatk-1\.0\.so\.0/i, message) ->
+        "Agent reported a blocked outcome because the required browser runtime dependency libatk-1.0.so.0 is missing"
+
+      Regex.match?(~r/\bSTATUS:\s*BLOCKED\b/i, message) ->
+        "Agent reported a blocked outcome"
+
+      true ->
+        "Agent reported a blocked outcome: #{String.slice(message, 0, 240)}"
+    end
   end
 
   @spec load_recoverable_session(Path.t()) :: SessionStore.session_data() | nil

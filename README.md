@@ -27,6 +27,9 @@ The current wedge is:
 
 `Todo issue 1개 자동 픽업 -> worktree 준비 -> Codex app-server 실행 -> GitHub write-back -> Project 상태 반영`
 
+By default, a successful unattended run moves the issue to `In Review` and
+keeps the GitHub issue open. Human review is what moves work to `Done`.
+
 ## Primary plan
 
 - [`../CONVERSION_PLAN.md`](../CONVERSION_PLAN.md) — current state, operating decisions, and next engineering gaps
@@ -57,8 +60,8 @@ tracker:
       project-status: Todo
     released:
       success:
-        issue-state: closed
-        project-status: Done
+        issue-state: open
+        project-status: In Review
       failed:
         issue-state: open
         project-status: Todo
@@ -126,6 +129,15 @@ export SOURCE_REPO_URL=git@github.com:example-org/example-repo.git
 
 mix run --no-halt
 ```
+
+For local runs in this repository, you can also use:
+
+```bash
+./bin/run-no-halt.sh
+```
+
+That script loads `.env` when present, defaults `SYMPHONY_WORKFLOW_PATH` to
+the repository's `WORKFLOW.md`, and executes `mise exec -- mix run --no-halt`.
 
 Runtime precedence for the source repo is:
 

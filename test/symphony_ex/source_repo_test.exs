@@ -131,7 +131,7 @@ defmodule SymphonyEx.SourceRepoTest do
   end
 
   defp tmp_dir!(label) do
-    path = Path.join(System.tmp_dir!(), "#{label}-#{System.unique_integer([:positive])}")
+    path = Path.join(System.tmp_dir!(), "#{label}-#{tmp_suffix()}")
     File.mkdir_p!(path)
     path
   end
@@ -159,5 +159,9 @@ defmodule SymphonyEx.SourceRepoTest do
         |> :erlang.md5()
         |> Base.encode16(case: :lower)
     end
+  end
+
+  defp tmp_suffix do
+    Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
   end
 end

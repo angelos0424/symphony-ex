@@ -176,6 +176,7 @@ defmodule SymphonyEx.ConfigTest do
 
         assert write_back[:labels] == ["symphony"]
         assert write_back[:assignee_mode] == :replace
+        assert write_back[:review_state_names] == ["In Review"]
         assert write_back[:claimed][:labels] == ["symphony:claimed"]
         assert write_back[:claimed][:assignees] == ["codex-bot"]
         assert write_back[:released][:success][:labels] == ["symphony:done"]
@@ -448,7 +449,7 @@ defmodule SymphonyEx.ConfigTest do
   end
 
   defp git_fixture_repo!(name) do
-    root = Path.join(System.tmp_dir!(), "#{name}-#{System.unique_integer([:positive])}")
+    root = Path.join(System.tmp_dir!(), "#{name}-#{tmp_suffix()}")
     File.mkdir_p!(root)
     File.write!(Path.join(root, "README.md"), "# fixture\n")
     {_, 0} = System.cmd("git", ["init", "-b", "main"], cd: root)
@@ -457,6 +458,10 @@ defmodule SymphonyEx.ConfigTest do
     {_, 0} = System.cmd("git", ["add", "README.md"], cd: root)
     {_, 0} = System.cmd("git", ["commit", "-m", "init"], cd: root)
     root
+  end
+
+  defp tmp_suffix do
+    Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
   end
 
   @tracked_env_vars [

@@ -99,7 +99,13 @@ defmodule SymphonyEx.Orchestrator do
   @default_serialization_label_prefixes ["scope:", "service:", "path:", "package:", "release:"]
   @default_starvation_bonus_step 25
   @default_starvation_bonus_cap 100
-  @github_visible_gating_reasons [:human_blocked, :missing_title, :serialized_conflict]
+  @github_visible_gating_reasons [
+    :dependency_blocked,
+    :human_blocked,
+    :missing_required_metadata,
+    :missing_title,
+    :serialized_conflict
+  ]
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
@@ -281,7 +287,9 @@ defmodule SymphonyEx.Orchestrator do
         {:cont, next_state}
 
       {:skip, next_state, reason} ->
-        next_state = note_gated_issue(next_state, retry.issue, reason, classify_issue(retry.issue))
+        next_state =
+          note_gated_issue(next_state, retry.issue, reason, classify_issue(retry.issue))
+
         {:cont, put_in(next_state, [:retry_queue, identifier], retry)}
 
       {:halt, next_state} ->
@@ -437,10 +445,20 @@ defmodule SymphonyEx.Orchestrator do
     case hydrate_candidate_issue(acc, issue) do
       {:ok, hydrated_issue} ->
         case dispatch_candidate(acc, hydrated_issue, 0, :candidate) do
-          {:ok, updated_state} -> {:cont, updated_state}
+          {:ok, updated_state} ->
+            {:cont, updated_state}
+
           {:skip, updated_state, reason} ->
-            {:cont, note_gated_issue(updated_state, hydrated_issue, reason, classify_issue(hydrated_issue))}
-          {:halt, updated_state} -> {:halt, updated_state}
+            {:cont,
+             note_gated_issue(
+               updated_state,
+               hydrated_issue,
+               reason,
+               classify_issue(hydrated_issue)
+             )}
+
+          {:halt, updated_state} ->
+            {:halt, updated_state}
         end
 
       {:skip, reason} ->
@@ -841,10 +859,18 @@ defmodule SymphonyEx.Orchestrator do
   defp check_issue_not_blocked(state, issue) do
     cond do
       blocked_issue?(issue, state.blocked_labels) -> {:skip, :human_blocked}
+      dependency_blocked?(issue) -> {:skip, :dependency_blocked}
+      missing_required_metadata?(issue) -> {:skip, :missing_required_metadata}
       conflict_locked?(state, issue) -> {:skip, :serialized_conflict}
       true -> :ok
     end
   end
+
+  @spec dependency_blocked?(Issue.t()) :: boolean()
+  defp dependency_blocked?(%Issue{} = issue), do: issue.blocked_by_identifiers != []
+
+  @spec missing_required_metadata?(Issue.t()) :: boolean()
+  defp missing_required_metadata?(%Issue{} = issue), do: issue.missing_required_fields != []
 
   @spec prioritize_candidates([Issue.t()], state()) :: {[Issue.t()], state()}
   defp prioritize_candidates(issues, state) do
@@ -1141,13 +1167,15 @@ defmodule SymphonyEx.Orchestrator do
 
   @spec persist_gated_issue(state(), Issue.t(), atom(), concurrency_class()) :: state()
   defp persist_gated_issue(state, issue, reason, klass) do
-    payload = %{
-      status: :gated,
-      attempt: Map.get(state.retries, issue.identifier, 0),
-      gating_reason: reason,
-      class: klass,
-      conflict_keys: issue_conflict_keys(issue, state) |> Logging.normalize_conflict_keys()
-    }
+    payload =
+      %{
+        status: :gated,
+        attempt: Map.get(state.retries, issue.identifier, 0),
+        gating_reason: reason,
+        class: klass,
+        conflict_keys: issue_conflict_keys(issue, state) |> Logging.normalize_conflict_keys()
+      }
+      |> maybe_put_gating_context(issue, reason)
 
     if Map.get(state.last_persisted_payloads, issue.identifier) == payload do
       state
@@ -1173,4 +1201,15 @@ defmodule SymphonyEx.Orchestrator do
       end
     end
   end
+
+  @spec maybe_put_gating_context(map(), Issue.t(), atom()) :: map()
+  defp maybe_put_gating_context(payload, %Issue{} = issue, :missing_required_metadata) do
+    Map.put(payload, :missing_required_fields, issue.missing_required_fields)
+  end
+
+  defp maybe_put_gating_context(payload, %Issue{} = issue, :dependency_blocked) do
+    Map.put(payload, :blocked_by_identifiers, issue.blocked_by_identifiers)
+  end
+
+  defp maybe_put_gating_context(payload, _issue, _reason), do: payload
 end

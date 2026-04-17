@@ -14,9 +14,17 @@ defmodule SymphonyEx.Test.GitHubClientStub do
 
   defp route_by_method(:get, url, _request) do
     cond do
-      String.ends_with?(url, "/issues") -> issues_list_response()
-      String.contains?(url, "/issues/12/comments") -> [%{"id" => 201, "body" => "first"}]
-      true -> %{"message" => "Not Found"}
+      String.ends_with?(url, "/issues") ->
+        issues_list_response()
+
+      String.ends_with?(url, "/issues/12/dependencies/blocked_by") ->
+        [%{"number" => 34, "state" => "open"}]
+
+      String.contains?(url, "/issues/12/comments") ->
+        [%{"id" => 201, "body" => "first"}]
+
+      true ->
+        %{"message" => "Not Found"}
     end
   end
 
@@ -202,6 +210,23 @@ defmodule SymphonyEx.GitHub.ClientTest do
     assert_received {:github_request, request}
     assert request.method == :patch
     assert request.options[:json] == %{body: "updated"}
+  end
+
+  test "lists built-in issue dependencies that block an issue" do
+    opts = [
+      api_key: "gh-token",
+      owner: "example",
+      repo: "repo",
+      request_fun: &GitHubClientStub.request/1
+    ]
+
+    assert {:ok, [%{"number" => 34}]} = Client.fetch_issue_blocked_by(12, opts)
+
+    assert_received {:github_request, request}
+    assert request.method == :get
+
+    assert to_string(request.url) ==
+             "https://api.github.com/repos/example/repo/issues/12/dependencies/blocked_by"
   end
 
   test "lists project items via GraphQL" do

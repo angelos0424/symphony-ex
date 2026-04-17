@@ -7,12 +7,15 @@ defmodule SymphonyEx.GitHub.Adapter do
 
   alias SymphonyEx.Domain.Issue
   alias SymphonyEx.GitHub.Client
+  alias SymphonyEx.GitHub.IssueBodyMetadata
   alias SymphonyEx.Observability
   alias SymphonyEx.Orchestrator.Lifecycle
   alias SymphonyEx.Telemetry
 
   @managed_start "<!-- symphony:managed -->"
   @managed_end "<!-- /symphony:managed -->"
+  @status_start "<!-- symphony:status -->"
+  @status_end "<!-- /symphony:status -->"
 
   @spec fetch_candidate_issues(keyword()) :: {:ok, [Issue.t()]} | {:error, term()}
   def fetch_candidate_issues(opts) do
@@ -29,7 +32,18 @@ defmodule SymphonyEx.GitHub.Adapter do
           {:ok, Issue.t() | nil} | {:error, term()}
   def fetch_issue_by_identifier(identifier, opts) do
     with {:ok, issue} <- Client.fetch_issue(identifier, opts) do
-      {:ok, if(issue, do: to_issue(issue), else: nil)}
+      case issue do
+        nil ->
+          {:ok, nil}
+
+        %{} = issue_map ->
+          with {:ok, blocked_by_issues} <- Client.fetch_issue_blocked_by(identifier, opts) do
+            {:ok,
+             to_issue(issue_map,
+               blocked_by_identifiers: extract_blocked_by_identifiers(blocked_by_issues)
+             )}
+          end
+      end
     end
   end
 
@@ -62,43 +76,45 @@ defmodule SymphonyEx.GitHub.Adapter do
   @spec write_run_record(Issue.t(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def write_run_record(%Issue{} = issue, attrs, opts) do
     body = render_run_record(issue, attrs)
-    description = upsert_managed_working_record(issue.description || "", body)
+    comment = managed_block(body)
 
-    case update_issue_description(issue.identifier, description, opts) do
-      {:ok, response} ->
-        emit_write_back_stage(issue, :managed_record, :success, %{status: Map.get(attrs, :status)})
+    with {:ok, response} <- create_comment(issue.identifier, comment, opts),
+         {:ok, _body_response} <- update_issue_status_summary(issue, attrs, opts) do
+      emit_write_back_stage(issue, :managed_record, :success, %{status: Map.get(attrs, :status)})
 
-        case sync_write_back(issue, attrs, opts) do
-          :ok ->
-            {:ok, response}
+      case sync_write_back(issue, attrs, opts) do
+        :ok ->
+          {:ok, response}
 
-          {:ok, {:partial, stage, reason}} ->
-            emit_write_back_stage(issue, :optional, :partial, %{
-              failed_stage: stage,
-              reason: inspect(reason)
-            })
+        {:ok, {:partial, stage, reason}} ->
+          emit_write_back_stage(issue, :optional, :partial, %{
+            failed_stage: stage,
+            reason: inspect(reason)
+          })
 
-            annotate_partial_write_back(issue, attrs, stage, reason, opts)
-            {:ok, response}
+          annotate_partial_write_back(issue, attrs, stage, reason, opts)
+          {:ok, response}
 
-          {:error, stage, reason} ->
-            emit_write_back_stage(issue, :essential, :failed, %{
-              failed_stage: stage,
-              reason: inspect(reason)
-            })
+        {:error, stage, reason} ->
+          emit_write_back_stage(issue, :essential, :failed, %{
+            failed_stage: stage,
+            reason: inspect(reason)
+          })
 
-            annotate_partial_write_back(issue, attrs, stage, reason, opts)
-            {:error, {:partial_write_back, stage, reason}}
-        end
-
+          annotate_partial_write_back(issue, attrs, stage, reason, opts)
+          {:error, {:partial_write_back, stage, reason}}
+      end
+    else
       {:error, reason} ->
         emit_write_back_stage(issue, :managed_record, :failed, %{reason: inspect(reason)})
         {:error, reason}
     end
   end
 
-  @spec to_issue(map()) :: Issue.t()
-  def to_issue(issue) do
+  @spec to_issue(map(), keyword()) :: Issue.t()
+  def to_issue(issue, opts \\ []) do
+    metadata = IssueBodyMetadata.parse(issue["body"] || "")
+
     %Issue{
       id: to_string(issue["id"] || issue["node_id"] || issue["number"]),
       identifier: to_string(issue["number"]),
@@ -109,7 +125,9 @@ defmodule SymphonyEx.GitHub.Adapter do
       priority: 0,
       labels: extract_labels(issue["labels"]),
       assignees: extract_assignees(issue["assignees"]),
-      conflict_hints: extract_conflict_hints(issue),
+      conflict_hints: metadata.conflict_hints,
+      missing_required_fields: metadata.missing_required_fields,
+      blocked_by_identifiers: Keyword.get(opts, :blocked_by_identifiers, []),
       parent_id: nil,
       children_ids: []
     }
@@ -138,10 +156,87 @@ defmodule SymphonyEx.GitHub.Adapter do
   @spec managed_block(String.t()) :: String.t()
   def managed_block(body), do: Enum.join([@managed_start, body, @managed_end], "\n")
 
-  @spec upsert_managed_working_record(String.t(), String.t()) :: String.t()
-  def upsert_managed_working_record(description, body) do
-    block = managed_block(body)
-    regex = ~r/<!-- symphony:managed -->.*?<!-- \/symphony:managed -->/s
+  @spec update_issue_status_summary(Issue.t(), map(), keyword()) ::
+          {:ok, map()} | {:error, term()}
+  defp update_issue_status_summary(%Issue{} = issue, attrs, opts) do
+    if Map.get(attrs, :status) in [:released] do
+      latest_body = latest_issue_description(issue, opts)
+      summary = render_issue_status_summary(issue, attrs, opts)
+      description = upsert_issue_status_summary(latest_body, summary)
+      update_issue_description(issue.identifier, description, opts)
+    else
+      {:ok, %{"body" => issue.description || ""}}
+    end
+  end
+
+  @spec render_issue_status_summary(Issue.t(), map(), keyword()) :: String.t()
+  defp render_issue_status_summary(%Issue{} = issue, attrs, opts) do
+    pr_line =
+      case latest_related_pr(issue, attrs, opts) do
+        nil -> "- Pull request: none"
+        pr -> "- Pull request: PR ##{pr["number"]} #{pr["html_url"]}"
+      end
+
+    outcome =
+      cond do
+        Map.get(attrs, :status) == :released and Map.get(attrs, :result) == :success ->
+          "pr_created"
+
+        Map.get(attrs, :status) == :released and Map.get(attrs, :result) == :failed ->
+          "failed"
+
+        true ->
+          to_string(Map.get(attrs, :status) || "unknown")
+      end
+
+    Enum.join(
+      [
+        "## Symphony Status",
+        "- Final status: #{outcome}",
+        "- Attempt: #{Map.get(attrs, :attempt, 0)}",
+        pr_line,
+        "- Updated at: #{DateTime.utc_now() |> DateTime.to_iso8601()}"
+      ],
+      "\n"
+    )
+  end
+
+  @spec latest_related_pr(Issue.t(), map(), keyword()) :: map() | nil
+  defp latest_related_pr(%Issue{} = issue, attrs, opts) do
+    if Map.get(attrs, :result) == :success do
+      case Client.list_pull_requests(opts) do
+        {:ok, prs} when is_list(prs) ->
+          issue_number = to_string(issue.identifier)
+
+          prs
+          |> Enum.filter(fn pr ->
+            body = pr["body"] || ""
+            head_ref = get_in(pr, ["head", "ref"]) || pr["headRefName"] || ""
+
+            String.contains?(body, "##{issue_number}") or
+              String.contains?(head_ref, "issue-#{issue_number}")
+          end)
+          |> Enum.sort_by(&(&1["created_at"] || &1["createdAt"] || ""), :desc)
+          |> List.first()
+
+        _ ->
+          nil
+      end
+    end
+  end
+
+  @spec latest_issue_description(Issue.t(), keyword()) :: String.t()
+  defp latest_issue_description(%Issue{} = issue, opts) do
+    case Client.fetch_issue(issue.identifier, opts) do
+      {:ok, %{} = latest_issue} -> latest_issue["body"] || issue.description || ""
+      _ -> issue.description || ""
+    end
+  end
+
+  @spec upsert_issue_status_summary(String.t(), String.t()) :: String.t()
+  defp upsert_issue_status_summary(description, summary) do
+    block = Enum.join([@status_start, summary, @status_end], "\n")
+    regex = ~r/<!-- symphony:status -->.*?<!-- \/symphony:status -->/s
 
     cond do
       description =~ regex -> String.replace(description, regex, block)
@@ -155,7 +250,7 @@ defmodule SymphonyEx.GitHub.Adapter do
     active_states = Keyword.get(opts, :active_states, ["In Progress", "Todo"])
     identifiers = Keyword.get(opts, :include_issue_identifiers, [])
 
-    with {:ok, items} <- Client.list_project_items(Keyword.put(opts, :include_issue_body, false)) do
+    with {:ok, items} <- Client.list_project_items(Keyword.put(opts, :include_issue_body, true)) do
       issues =
         items
         |> Enum.filter(&active_project_item?(&1, active_states))
@@ -181,7 +276,31 @@ defmodule SymphonyEx.GitHub.Adapter do
     status = project_item_status(item)
     issue = Map.get(item, "content", %{})
 
-    is_map(issue) and is_integer(issue["number"]) and status in active_states
+    is_map(issue) and is_integer(issue["number"]) and status in active_states and
+      not rerun_blocked_item?(item)
+  end
+
+  @spec rerun_blocked_item?(map()) :: boolean()
+  defp rerun_blocked_item?(%{"content" => %{} = issue} = item) do
+    body = issue["body"] || ""
+    status = project_item_status(item)
+
+    review_or_done_status?(status) or body_indicates_terminal_review_state?(body)
+  end
+
+  defp rerun_blocked_item?(_item), do: false
+
+  @spec review_or_done_status?(String.t() | nil) :: boolean()
+  defp review_or_done_status?(status) when is_binary(status) do
+    status in ["In Review", "Done"]
+  end
+
+  defp review_or_done_status?(_status), do: false
+
+  @spec body_indicates_terminal_review_state?(String.t()) :: boolean()
+  defp body_indicates_terminal_review_state?(body) do
+    String.match?(body, ~r/Final status:\s*(pr_created|in_review|done)/i) or
+      String.match?(body, ~r/Pull request:\s*PR\s*#/i)
   end
 
   @spec project_item_status(map()) :: String.t() | nil
@@ -254,7 +373,8 @@ defmodule SymphonyEx.GitHub.Adapter do
           emit_write_back_stage(issue, :optional, :success, %{status: Map.get(attrs, :status)})
           :ok
 
-        {:error, stage, reason} -> {:ok, {:partial, stage, reason}}
+        {:error, stage, reason} ->
+          {:ok, {:partial, stage, reason}}
       end
     end
   end
@@ -297,7 +417,13 @@ defmodule SymphonyEx.GitHub.Adapter do
     else
       case fetch_project_item(issue, opts) do
         {:ok, item} ->
-          sync_project_field(item, "Status", desired_status, opts)
+          current_status = project_item_status(item)
+
+          if project_status_regression?(current_status, desired_status) do
+            :ok
+          else
+            sync_project_field(item, "Status", desired_status, opts)
+          end
 
         {:error, {:project_item_not_found, _identifier}} ->
           :ok
@@ -307,6 +433,24 @@ defmodule SymphonyEx.GitHub.Adapter do
       end
     end
   end
+
+  @spec project_status_regression?(String.t() | nil, String.t()) :: boolean()
+  defp project_status_regression?(current_status, desired_status) do
+    case {project_status_rank(current_status), project_status_rank(desired_status)} do
+      {current_rank, desired_rank} when is_integer(current_rank) and is_integer(desired_rank) ->
+        current_rank > desired_rank
+
+      _ ->
+        false
+    end
+  end
+
+  @spec project_status_rank(String.t() | nil) :: integer() | nil
+  defp project_status_rank("Todo"), do: 1
+  defp project_status_rank("In Progress"), do: 2
+  defp project_status_rank("In Review"), do: 3
+  defp project_status_rank("Done"), do: 4
+  defp project_status_rank(_status), do: nil
 
   @spec maybe_sync_additional_project_fields(Issue.t(), map(), keyword()) ::
           :ok | {:error, atom(), term()}
@@ -351,8 +495,8 @@ defmodule SymphonyEx.GitHub.Adapter do
              item["id"],
              field_definition["id"],
              payload,
-           opts
-         ) do
+             opts
+           ) do
       :ok
     else
       true -> :ok
@@ -372,7 +516,8 @@ defmodule SymphonyEx.GitHub.Adapter do
     end
   end
 
-  @spec maybe_cleanup_managed_labels(Issue.t(), map(), keyword()) :: :ok | {:error, atom(), term()}
+  @spec maybe_cleanup_managed_labels(Issue.t(), map(), keyword()) ::
+          :ok | {:error, atom(), term()}
   defp maybe_cleanup_managed_labels(%Issue{} = issue, attrs, opts) do
     existing_labels = MapSet.new(Enum.map(issue.labels, &normalize_value/1))
     desired_labels = MapSet.new(Enum.map(write_back_labels(attrs, opts), &normalize_value/1))
@@ -449,9 +594,9 @@ defmodule SymphonyEx.GitHub.Adapter do
       |> Map.put(:partial_write_back_reason, inspect(reason))
 
     partial_body = render_run_record(issue, partial_attrs)
-    partial_description = upsert_managed_working_record(issue.description || "", partial_body)
+    partial_comment = managed_block(partial_body)
 
-    case update_issue_description(issue.identifier, partial_description, opts) do
+    case create_comment(issue.identifier, partial_comment, opts) do
       {:ok, _response} ->
         emit_write_back_stage(issue, :annotation, :success, %{
           failed_stage: stage,
@@ -773,14 +918,16 @@ defmodule SymphonyEx.GitHub.Adapter do
       List.first(Keyword.get(write_back, :in_progress_state_names, ["In Progress"]))
 
     todo_name = todo_project_state_name(opts, in_progress_name)
-    done_name = List.first(Keyword.get(opts, :terminal_states, ["Done"]))
+
+    review_name =
+      List.first(Keyword.get(write_back, :review_state_names, ["In Review"]))
 
     Lifecycle.new(
       project_status_mapping: %{
         {:claimed, :any} => in_progress_name,
         {:running, :any} => in_progress_name,
         {:retry_queued, :any} => todo_name,
-        {:released, :success} => done_name,
+        {:released, :success} => review_name,
         {:released, :any} => todo_name
       }
     )
@@ -860,64 +1007,31 @@ defmodule SymphonyEx.GitHub.Adapter do
 
   defp extract_assignees(_assignees), do: []
 
-  @spec extract_conflict_hints(map()) :: [String.t()]
-  defp extract_conflict_hints(issue) do
-    issue
-    |> Map.get("body", "")
-    |> to_string()
-    |> String.split("\n")
-    |> Enum.flat_map(&conflict_hints_from_line/1)
-    |> Enum.map(&normalize_value/1)
-    |> Enum.reject(&(&1 == ""))
+  @spec extract_blocked_by_identifiers([map()]) :: [String.t()]
+  defp extract_blocked_by_identifiers(issues) do
+    issues
+    |> Enum.filter(&dependency_open?/1)
+    |> Enum.map(&dependency_identifier/1)
+    |> Enum.reject(&is_nil/1)
     |> Enum.uniq()
   end
 
-  @spec conflict_hints_from_line(String.t()) :: [String.t()]
-  defp conflict_hints_from_line(line) do
-    trimmed = String.trim(line)
+  @spec dependency_open?(map()) :: boolean()
+  defp dependency_open?(issue) do
+    normalized =
+      issue
+      |> Map.get("state", "")
+      |> normalize_value()
 
-    cond do
-      trimmed == "" ->
-        []
-
-      String.contains?(trimmed, ":") ->
-        [head, rest] = String.split(trimmed, ":", parts: 2)
-        normalize_conflict_hint_values(head, rest)
-
-      true ->
-        []
-    end
+    normalized not in ["closed", "done"]
   end
 
-  @conflict_hint_prefixes %{
-    "scope" => nil,
-    "conflict-scope" => nil,
-    "conflict_scope" => nil,
-    "service" => "service:",
-    "services" => "service:",
-    "path" => "path:",
-    "paths" => "path:",
-    "package" => "package:",
-    "packages" => "package:",
-    "release" => "release:"
-  }
+  @spec dependency_identifier(map()) :: String.t() | nil
+  defp dependency_identifier(%{"number" => number}) when is_integer(number),
+    do: Integer.to_string(number)
 
-  @spec normalize_conflict_hint_values(String.t(), String.t()) :: [String.t()]
-  defp normalize_conflict_hint_values(head, rest) do
-    prefix = Map.get(@conflict_hint_prefixes, normalize_value(head), :ignore)
-
-    values =
-      rest
-      |> String.split([",", " "], trim: true)
-      |> Enum.map(&String.trim/1)
-      |> Enum.reject(&(&1 == ""))
-
-    case prefix do
-      :ignore -> []
-      nil -> values
-      pref -> Enum.map(values, &(pref <> &1))
-    end
-  end
+  defp dependency_identifier(%{"number" => number}) when is_binary(number), do: number
+  defp dependency_identifier(_issue), do: nil
 
   @spec label_name(term()) :: String.t()
   defp label_name(%{"name" => name}), do: name

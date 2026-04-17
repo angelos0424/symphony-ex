@@ -4,8 +4,9 @@ defmodule SymphonyEx.Orchestrator.Lifecycle do
   semantics (issue open/closed, project status field names, and additional
   GitHub Project field values).
 
-  The default mapping mirrors the implicit behaviour that existed before this
-  module was extracted, so existing callers are backward-compatible.
+  The default mapping reflects the GitHub-first operating model used by this
+  repository: successful agent runs move issues into review while leaving the
+  issue open for a human decision.
 
   ## Fields
 
@@ -39,14 +40,14 @@ defmodule SymphonyEx.Orchestrator.Lifecycle do
               {:claimed, :any} => :open,
               {:running, :any} => :open,
               {:retry_queued, :any} => :open,
-              {:released, :success} => :closed,
+              {:released, :success} => :open,
               {:released, :any} => :open
             },
             project_status_mapping: %{
               {:claimed, :any} => "In Progress",
               {:running, :any} => "In Progress",
               {:retry_queued, :any} => "Todo",
-              {:released, :success} => "Done",
+              {:released, :success} => "In Review",
               {:released, :any} => "Todo"
             },
             project_field_mapping: %{}
