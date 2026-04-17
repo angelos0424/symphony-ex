@@ -15,6 +15,7 @@ defmodule SymphonyEx.OrchestratorTest do
             issue_lookup: Keyword.get(opts, :issue_lookup, %{}),
             run_results: Keyword.get(opts, :run_results, []),
             updates: [],
+            comments: [],
             runs: [],
             fetches: [],
             candidate_polls: 0,
@@ -73,8 +74,18 @@ defmodule SymphonyEx.OrchestratorTest do
       end)
     end
 
+    def record_comment(issue_identifier, body) do
+      Agent.update(__MODULE__, fn state ->
+        %{state | comments: [%{issue_identifier: issue_identifier, body: body} | state.comments]}
+      end)
+    end
+
     def updates do
       Agent.get(__MODULE__, &Enum.reverse(&1.updates))
+    end
+
+    def comments do
+      Agent.get(__MODULE__, &Enum.reverse(&1.comments))
     end
 
     def runs do
@@ -88,7 +99,11 @@ defmodule SymphonyEx.OrchestratorTest do
     def fetch_candidate_issues(_opts), do: {:ok, Control.next_candidates()}
     def fetch_issue_by_identifier(identifier, _opts), do: {:ok, Control.next_issue(identifier)}
     def fetch_issue_comments(_issue_id, _opts), do: {:ok, []}
-    def create_comment(_issue_id, _body, _opts), do: {:ok, %{}}
+
+    def create_comment(issue_id, body, _opts) do
+      Control.record_comment(issue_id, body)
+      {:ok, %{}}
+    end
     def update_issue_state(_issue, _state_name, _opts), do: {:ok, %{}}
     def update_issue_description(_issue_id, _description, _opts), do: {:ok, %{}}
 
@@ -103,6 +118,19 @@ defmodule SymphonyEx.OrchestratorTest do
     def create(issue, _opts), do: {:ok, "/tmp/#{issue.identifier}"}
     def remove(_path, _opts), do: :ok
     def run_lifecycle_hook(_name, _path, _opts, _issue), do: :ok
+    def cleanup_inactive_worktrees(_opts), do: :ok
+  end
+
+  defmodule CleanupWorkspace do
+    def prepare(issue, _opts), do: {:ok, %{path: "/tmp/#{issue.identifier}", reason: :fresh}}
+    def create(issue, _opts), do: {:ok, "/tmp/#{issue.identifier}"}
+    def remove(_path, _opts), do: :ok
+    def run_lifecycle_hook(_name, _path, _opts, _issue), do: :ok
+
+    def cleanup_inactive_worktrees(opts) do
+      send(Keyword.fetch!(opts, :test_pid), {:cleanup_called, Keyword.get(opts, :active_issue_identifiers, [])})
+      :ok
+    end
   end
 
   defmodule BeforeHookFailWorkspace do
@@ -218,6 +246,68 @@ defmodule SymphonyEx.OrchestratorTest do
     send(orchestrator, :tick)
 
     refute_receive {:runtime_snapshot_updated, _}, 75
+  end
+
+  test "runs inactive worktree cleanup during ticks" do
+    start_supervised!({Control, test_pid: self(), candidate_batches: [[]]})
+
+    start_supervised!(
+      {Orchestrator,
+       tracker: MockTracker,
+       workspace: CleanupWorkspace,
+       agent_runner: MockAgentRunner,
+       tracker_opts: [],
+       workspace_opts: [test_pid: self()],
+       workflow_path: "/tmp/WORKFLOW.md",
+       codex: [],
+       poll_interval_ms: 60_000,
+       retry_backoff_ms: 10,
+       max_retry_backoff_ms: 10,
+       max_concurrent: 1,
+       task_supervisor: SymphonyEx.TestAgentWorkers}
+    )
+
+    assert_receive {:cleanup_called, []}, 500
+  end
+
+  test "posts a completion summary comment after successful runs" do
+    issue = issue_fixture("SUMMARY-1")
+
+    start_supervised!(
+      {Control,
+       test_pid: self(),
+       candidate_batches: [[issue], []],
+       run_results: [
+         %{status: :success, events: [], error: nil, last_message: "- what changed\n- files touched\n- validation performed"}
+       ]}
+    )
+
+    orchestrator =
+      start_supervised!(
+        {Orchestrator,
+         tracker: MockTracker,
+         workspace: MockWorkspace,
+         agent_runner: MockAgentRunner,
+         tracker_opts: [],
+         workspace_opts: [],
+         workflow_path: "/tmp/WORKFLOW.md",
+         codex: [],
+         poll_interval_ms: 25,
+         retry_backoff_ms: 10,
+         max_retry_backoff_ms: 10,
+         max_concurrent: 1,
+         task_supervisor: SymphonyEx.TestAgentWorkers}
+      )
+
+    wait_until(fn ->
+      snapshot = Orchestrator.snapshot(orchestrator)
+      map_size(snapshot.running) == 0 and length(snapshot.completed) == 1
+    end)
+
+    assert Enum.any?(Control.comments(), fn %{issue_identifier: identifier, body: body} ->
+             identifier == "SUMMARY-1" and body =~ "## Symphony 작업 요약" and
+               body =~ "files touched"
+           end)
   end
 
   test "before_run hook failure blocks execution before the agent starts" do

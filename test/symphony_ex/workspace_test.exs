@@ -5,6 +5,12 @@ defmodule SymphonyEx.WorkspaceTest do
   alias SymphonyEx.SessionStore
   alias SymphonyEx.Workspace
 
+  defmodule ClosedIssueTracker do
+    def fetch_issue_by_identifier("13", _opts) do
+      {:ok, %Issue{id: "13", identifier: "13", title: "Closed", description: "", state: "Closed"}}
+    end
+  end
+
   test "sanitizes workspace path from issue identifier" do
     issue = %Issue{
       id: "1",
@@ -236,5 +242,50 @@ defmodule SymphonyEx.WorkspaceTest do
     assert_received :cloned
     assert_received :pruned
     assert_received :added
+  end
+
+  test "cleanup_inactive_worktrees removes closed issue worktrees" do
+    root = Path.join(System.tmp_dir!(), "symphony-workspace-cleanup-#{System.unique_integer([:positive])}")
+    source_repo_path = Path.join(root, "source")
+    worktree_path = Path.join(root, "13")
+
+    File.mkdir_p!(source_repo_path)
+    File.mkdir_p!(worktree_path)
+
+    assert {:ok, _session} =
+             SessionStore.save(worktree_path, %{
+               issue_identifier: "13",
+               thread_id: "thread-stale",
+               turns_executed: 0,
+               capability_profile: %{},
+               recovery_count: 0,
+               phase: :running
+             })
+
+    parent = self()
+
+    shell = fn
+      "git", ["worktree", "remove", "--force", ^worktree_path], [cd: ^source_repo_path] ->
+        send(parent, :removed)
+        File.rm_rf!(worktree_path)
+        {"", 0}
+
+      "git", ["worktree", "list", "--porcelain"], [cd: ^source_repo_path] ->
+        {"worktree #{source_repo_path}\nworktree #{worktree_path}\n", 0}
+
+      "git", ["worktree", "prune"], [cd: ^source_repo_path] ->
+        {"", 0}
+    end
+
+    assert :ok =
+             Workspace.cleanup_inactive_worktrees(
+               root: root,
+               source_repo_path: source_repo_path,
+               tracker: ClosedIssueTracker,
+               shell_fun: shell
+             )
+
+    assert_received :removed
+    refute File.exists?(worktree_path)
   end
 end

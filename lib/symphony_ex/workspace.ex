@@ -52,6 +52,30 @@ defmodule SymphonyEx.Workspace do
     end
   end
 
+  @spec cleanup_inactive_worktrees(keyword()) :: :ok
+  def cleanup_inactive_worktrees(opts) do
+    root = Keyword.fetch!(opts, :root)
+    source_repo_path = Keyword.fetch!(opts, :source_repo_path)
+    shell = Keyword.get(opts, :shell_fun, &System.cmd/3)
+    tracker = Keyword.get(opts, :tracker)
+    tracker_opts = Keyword.get(opts, :tracker_opts, [])
+    active_issue_identifiers = MapSet.new(Keyword.get(opts, :active_issue_identifiers, []))
+
+    if is_atom(tracker) do
+      root
+      |> inactive_worktree_candidates(source_repo_path, shell)
+      |> Enum.reject(&(worktree_active_for_issue?(&1, active_issue_identifiers)))
+      |> Enum.each(fn {path, issue_identifier} ->
+        if remove_inactive_worktree?(issue_identifier, tracker, tracker_opts) do
+          _ = remove(path, opts)
+        end
+      end)
+    end
+
+    _ = shell.("git", ["worktree", "prune"], cd: source_repo_path)
+    :ok
+  end
+
   @spec remove(String.t(), keyword()) :: :ok | {:error, term()}
   def remove(path, opts) do
     source_repo_path = Keyword.fetch!(opts, :source_repo_path)
@@ -138,6 +162,67 @@ defmodule SymphonyEx.Workspace do
       true -> {:ok, {:reset, :nonrecoverable_session}}
     end
   end
+
+  @spec inactive_worktree_candidates(String.t(), String.t(), shell_fun()) :: [{String.t(), String.t()}]
+  defp inactive_worktree_candidates(root, source_repo_path, shell) do
+    tracked_worktrees = MapSet.new(active_worktree_paths(source_repo_path, shell))
+    expanded_source_repo_path = Path.expand(source_repo_path)
+
+    if File.dir?(root) do
+      root
+      |> File.ls!()
+      |> Enum.map(&Path.join(root, &1))
+      |> Enum.filter(fn path ->
+        expanded = Path.expand(path)
+        File.dir?(path) and expanded != expanded_source_repo_path and
+          MapSet.member?(tracked_worktrees, expanded)
+      end)
+      |> Enum.flat_map(fn path ->
+        case issue_identifier_for_path(path) do
+          nil -> []
+          identifier -> [{path, identifier}]
+        end
+      end)
+    else
+      []
+    end
+  end
+
+  @spec issue_identifier_for_path(String.t()) :: String.t() | nil
+  defp issue_identifier_for_path(path) do
+    case SessionStore.load(path) do
+      {:ok, %{issue_identifier: identifier}} when is_binary(identifier) and identifier != "" ->
+        identifier
+
+      _ ->
+        case Path.basename(path) do
+          "" -> nil
+          value -> value
+        end
+    end
+  end
+
+  @spec worktree_active_for_issue?({String.t(), String.t()}, MapSet.t(String.t())) :: boolean()
+  defp worktree_active_for_issue?({_path, issue_identifier}, active_issue_identifiers) do
+    MapSet.member?(active_issue_identifiers, issue_identifier)
+  end
+
+  @spec remove_inactive_worktree?(String.t(), module(), keyword()) :: boolean()
+  defp remove_inactive_worktree?(issue_identifier, tracker, tracker_opts) do
+    case tracker.fetch_issue_by_identifier(issue_identifier, tracker_opts) do
+      {:ok, nil} -> true
+      {:ok, %Issue{} = issue} -> inactive_issue_state?(issue.state)
+      {:error, _reason} -> false
+    end
+  end
+
+  @spec inactive_issue_state?(String.t() | nil) :: boolean()
+  defp inactive_issue_state?(state) when is_binary(state) do
+    normalized = state |> String.trim() |> String.downcase()
+    normalized in ["closed", "done", "in review"]
+  end
+
+  defp inactive_issue_state?(_state), do: false
 
   @spec cleanup_stale_worktree_path(String.t(), String.t(), String.t(), shell_fun()) ::
           :ok | {:error, term()}

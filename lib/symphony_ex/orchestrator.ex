@@ -181,6 +181,7 @@ defmodule SymphonyEx.Orchestrator do
 
     state =
       state
+      |> cleanup_inactive_worktrees()
       |> dispatch_due_retries()
       |> maybe_dispatch_explicit_issue()
       |> maybe_dispatch_candidates()
@@ -617,9 +618,17 @@ defmodule SymphonyEx.Orchestrator do
   @spec maybe_retry_or_release(state(), Issue.t(), non_neg_integer(), term(), running_entry()) ::
           state()
   defp maybe_retry_or_release(state, issue, attempt, %{status: :success} = result, running_entry) do
+    metadata = completion_metadata(result, running_entry)
+
     state
-    |> persist_run_state(issue, :released, attempt, %{result: :success})
-    |> clear_issue_retry_state(issue, attempt, completion_metadata(result, running_entry))
+    |> maybe_post_completion_summary(issue, metadata)
+    |> persist_run_state(
+      issue,
+      :released,
+      attempt,
+      Map.merge(%{result: :success}, persisted_completion_metadata(metadata))
+    )
+    |> clear_issue_retry_state(issue, attempt, metadata)
   end
 
   defp maybe_retry_or_release(
@@ -747,6 +756,21 @@ defmodule SymphonyEx.Orchestrator do
     end
   end
 
+  @spec cleanup_inactive_worktrees(state()) :: state()
+  defp cleanup_inactive_worktrees(state) do
+    if function_exported?(state.workspace, :cleanup_inactive_worktrees, 1) do
+      state.workspace.cleanup_inactive_worktrees(
+        Keyword.merge(state.workspace_opts,
+          tracker: state.tracker,
+          tracker_opts: state.tracker_opts,
+          active_issue_identifiers: Map.keys(state.running)
+        )
+      )
+    end
+
+    state
+  end
+
   @spec completion_metadata(map(), running_entry()) :: map()
   defp completion_metadata(result, running_entry) do
     %{
@@ -764,6 +788,55 @@ defmodule SymphonyEx.Orchestrator do
       error: result[:error],
       error_category: result[:error_category]
     }
+  end
+
+  @spec maybe_post_completion_summary(state(), Issue.t(), map()) :: state()
+  defp maybe_post_completion_summary(state, issue, metadata) do
+    case completion_summary_comment_body(metadata) do
+      nil ->
+        state
+
+      body ->
+        case state.tracker.create_comment(issue.identifier, body, state.tracker_opts) do
+          {:ok, _response} -> state
+          {:error, _reason} -> state
+        end
+    end
+  end
+
+  @spec persisted_completion_metadata(map()) :: map()
+  defp persisted_completion_metadata(metadata) do
+    Map.take(metadata, [
+      :elapsed_ms,
+      :thread_id,
+      :turn_id,
+      :session_id,
+      :recovery_count,
+      :last_event,
+      :error,
+      :error_category
+    ])
+  end
+
+  @spec completion_summary_comment_body(map()) :: String.t() | nil
+  defp completion_summary_comment_body(metadata) do
+    case metadata[:last_message] do
+      message when is_binary(message) ->
+        trimmed = String.trim(message)
+
+        if trimmed == "" do
+          nil
+        else
+          [
+            "## Symphony 작업 요약",
+            trimmed
+          ]
+          |> Enum.join("\n\n")
+        end
+
+      _ ->
+        nil
+    end
   end
 
   @spec publish_snapshot(map()) :: map()
