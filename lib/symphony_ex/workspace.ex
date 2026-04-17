@@ -219,7 +219,7 @@ defmodule SymphonyEx.Workspace do
   @spec inactive_issue_state?(String.t() | nil) :: boolean()
   defp inactive_issue_state?(state) when is_binary(state) do
     normalized = state |> String.trim() |> String.downcase()
-    normalized in ["closed", "done", "in review"]
+    normalized in ["closed", "done"]
   end
 
   defp inactive_issue_state?(_state), do: false
