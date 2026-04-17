@@ -132,8 +132,7 @@ defmodule SymphonyEx.Workspace do
         ) :: {:ok, prepare_result()} | {:error, term()}
   defp create_fresh_worktree(path, root, source_repo_path, shell, hooks, issue, reason) do
     with :ok <- cleanup_stale_worktree_path(root, path, source_repo_path, shell),
-         {_, 0} <-
-           shell.("git", ["worktree", "add", "--detach", path, "HEAD"], cd: source_repo_path),
+         {_, 0} <- shell.("git", worktree_add_args(path, issue), cd: source_repo_path),
          :ok <- run_hook(:after_create, hooks, path, shell, issue) do
       {:ok, %{path: path, reason: reason}}
     else
@@ -141,6 +140,27 @@ defmodule SymphonyEx.Workspace do
       {output, code} when is_integer(code) -> {:error, {:git_failed, code, output}}
     end
   end
+
+  @spec worktree_add_args(String.t(), Issue.t()) :: [String.t()]
+  defp worktree_add_args(path, %Issue{target_branch: target_branch}) when is_binary(target_branch) do
+    branch = String.trim(target_branch)
+
+    if branch == "" do
+      ["worktree", "add", "--detach", path, "HEAD"]
+    else
+      [
+        "worktree",
+        "add",
+        "--track",
+        "-B",
+        branch,
+        path,
+        "refs/remotes/origin/#{branch}"
+      ]
+    end
+  end
+
+  defp worktree_add_args(path, %Issue{}), do: ["worktree", "add", "--detach", path, "HEAD"]
 
   @spec preflight_session(String.t()) :: {:ok, prepare_reason()} | {:error, term()}
   defp preflight_session(path) do

@@ -210,6 +210,15 @@ defmodule SymphonyEx.WorkspaceTest do
         send(parent, :cloned)
         {"", 0}
 
+      "git", ["rev-parse", "--is-inside-work-tree"], [cd: ^source_repo_path] ->
+        {"true\n", 0}
+
+      "git", ["remote", "get-url", "origin"], [cd: ^source_repo_path] ->
+        {"https://github.com/example/project.git\n", 0}
+
+      "git", ["fetch", "--all", "--prune"], [cd: ^source_repo_path] ->
+        {"", 0}
+
       "git", ["remote", "set-head", "origin", "--auto"], [cd: ^source_repo_path] ->
         {"", 0}
 
@@ -242,6 +251,54 @@ defmodule SymphonyEx.WorkspaceTest do
     assert_received :cloned
     assert_received :pruned
     assert_received :added
+  end
+
+  test "prepare checks out target branch worktree when issue metadata requires an existing branch" do
+    root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-workspace-test-#{System.unique_integer([:positive])}"
+      )
+
+    source_repo_path = Path.join(root, "source")
+
+    issue = %Issue{
+      id: "1",
+      identifier: "SYM-101",
+      title: "Title",
+      description: "",
+      state: "Todo",
+      target_branch: "codex/issue-14-design-audit-apply"
+    }
+
+    path = Workspace.path_for_issue(root, issue)
+    parent = self()
+
+    File.mkdir_p!(source_repo_path)
+
+    shell = fn
+      "git", ["worktree", "prune"], [cd: ^source_repo_path] ->
+        send(parent, :pruned)
+        {"", 0}
+
+      "git", ["worktree", "list", "--porcelain"], [cd: ^source_repo_path] ->
+        {"worktree #{source_repo_path}\n", 0}
+
+      "git", ["worktree", "add", "--track", "-B", "codex/issue-14-design-audit-apply", ^path,
+              "refs/remotes/origin/codex/issue-14-design-audit-apply"], [cd: ^source_repo_path] ->
+        send(parent, :added_target_branch)
+        {"", 0}
+    end
+
+    assert {:ok, %{path: ^path, reason: :fresh}} =
+             Workspace.prepare(issue,
+               root: root,
+               source_repo_path: source_repo_path,
+               shell_fun: shell
+             )
+
+    assert_received :pruned
+    assert_received :added_target_branch
   end
 
   test "cleanup_inactive_worktrees removes closed issue worktrees" do

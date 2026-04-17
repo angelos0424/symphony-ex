@@ -124,6 +124,41 @@ defmodule SymphonyEx.SourceRepoTest do
              )
   end
 
+  test "fetch_pull_request-compatible target branch refs can rely on fetched remote state without changing cached default head" do
+    root = tmp_dir!("existing-cache-target-branch")
+    cache_root = Path.join(root, "cache")
+    repo = Path.join(cache_root, "github.com__example__project")
+    File.mkdir_p!(repo)
+
+    shell = fn
+      "git", ["rev-parse", "--is-inside-work-tree"], [cd: ^repo] ->
+        {"true\n", 0}
+
+      "git", ["remote", "get-url", "origin"], [cd: ^repo] ->
+        {"https://github.com/example/project.git\n", 0}
+
+      "git", ["fetch", "--all", "--prune"], [cd: ^repo] ->
+        {"", 0}
+
+      "git", ["remote", "set-head", "origin", "--auto"], [cd: ^repo] ->
+        {"", 0}
+
+      "git", ["symbolic-ref", "refs/remotes/origin/HEAD"], [cd: ^repo] ->
+        {"refs/remotes/origin/main\n", 0}
+
+      "git", ["checkout", "--detach", "refs/remotes/origin/main"], [cd: ^repo] ->
+        {"", 0}
+    end
+
+    assert :ok =
+             SourceRepo.ensure_ready(
+               source_repo_path: repo,
+               source_repo_url: "https://github.com/example/project.git",
+               source_cache_root: cache_root,
+               shell_fun: shell
+             )
+  end
+
   test "returns clear error when neither path nor url is configured" do
     assert_raise ArgumentError, ~r/workspace.source_repo_path/, fn ->
       SourceRepo.resolve_workspace!(root: tmp_dir!("missing-source"))

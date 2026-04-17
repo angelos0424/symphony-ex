@@ -18,6 +18,8 @@ defmodule SymphonyEx.Domain.Issue do
           conflict_hints: [String.t()],
           missing_required_fields: [atom()],
           blocked_by_identifiers: [String.t()],
+          target_branch: String.t() | nil,
+          target_pr: pos_integer() | nil,
           parent_id: String.t() | nil,
           children_ids: [String.t()]
         }
@@ -37,6 +39,8 @@ defmodule SymphonyEx.Domain.Issue do
     conflict_hints: [],
     missing_required_fields: [],
     blocked_by_identifiers: [],
+    target_branch: nil,
+    target_pr: nil,
     children_ids: []
   ]
 end

@@ -23,7 +23,7 @@ defmodule SymphonyEx.GitHub.Adapter do
       fetch_project_candidate_issues(opts)
     else
       with {:ok, issues} <- Client.fetch_candidate_issues(opts) do
-        {:ok, Enum.map(issues, &to_issue/1)}
+        {:ok, Enum.map(issues, &to_issue(&1, opts))}
       end
     end
   end
@@ -40,7 +40,11 @@ defmodule SymphonyEx.GitHub.Adapter do
           with {:ok, blocked_by_issues} <- Client.fetch_issue_blocked_by(identifier, opts) do
             {:ok,
              to_issue(issue_map,
-               blocked_by_identifiers: extract_blocked_by_identifiers(blocked_by_issues)
+               opts
+               |> Keyword.put(
+                 :blocked_by_identifiers,
+                 extract_blocked_by_identifiers(blocked_by_issues)
+               )
              )}
           end
       end
@@ -114,6 +118,8 @@ defmodule SymphonyEx.GitHub.Adapter do
   @spec to_issue(map(), keyword()) :: Issue.t()
   def to_issue(issue, opts \\ []) do
     metadata = IssueBodyMetadata.parse(issue["body"] || "")
+    target_pr = metadata.target_pr
+    target_branch = metadata.target_branch || resolve_target_branch_from_pr(target_pr, opts)
 
     %Issue{
       id: to_string(issue["id"] || issue["node_id"] || issue["number"]),
@@ -128,6 +134,8 @@ defmodule SymphonyEx.GitHub.Adapter do
       conflict_hints: metadata.conflict_hints,
       missing_required_fields: metadata.missing_required_fields,
       blocked_by_identifiers: Keyword.get(opts, :blocked_by_identifiers, []),
+      target_branch: target_branch,
+      target_pr: target_pr,
       parent_id: nil,
       children_ids: []
     }
@@ -233,6 +241,20 @@ defmodule SymphonyEx.GitHub.Adapter do
     end
   end
 
+  @spec resolve_target_branch_from_pr(pos_integer() | nil, keyword()) :: String.t() | nil
+  defp resolve_target_branch_from_pr(nil, _opts), do: nil
+
+  defp resolve_target_branch_from_pr(pr_number, opts) when is_integer(pr_number) do
+    if Enum.all?([:owner, :repo], &Keyword.has_key?(opts, &1)) do
+      case Client.fetch_pull_request(pr_number, opts) do
+        {:ok, %{} = pr} -> get_in(pr, ["head", "ref"]) || pr["headRefName"]
+        _other -> nil
+      end
+    else
+      nil
+    end
+  end
+
   @spec upsert_issue_status_summary(String.t(), String.t()) :: String.t()
   defp upsert_issue_status_summary(description, summary) do
     block = Enum.join([@status_start, summary, @status_end], "\n")
@@ -254,7 +276,7 @@ defmodule SymphonyEx.GitHub.Adapter do
       issues =
         items
         |> Enum.filter(&active_project_item?(&1, active_states))
-        |> Enum.map(&project_item_to_issue/1)
+        |> Enum.map(&project_item_to_issue(&1, opts))
         |> Enum.reject(&is_nil/1)
         |> maybe_filter_issue_identifiers(identifiers)
 
@@ -262,14 +284,14 @@ defmodule SymphonyEx.GitHub.Adapter do
     end
   end
 
-  @spec project_item_to_issue(map()) :: Issue.t() | nil
-  defp project_item_to_issue(%{"content" => %{"number" => _number} = issue} = item) do
+  @spec project_item_to_issue(map(), keyword()) :: Issue.t() | nil
+  defp project_item_to_issue(%{"content" => %{"number" => _number} = issue} = item, opts) do
     issue
     |> Map.put("state", project_item_status(item) || issue["state"])
-    |> to_issue()
+    |> to_issue(opts)
   end
 
-  defp project_item_to_issue(_item), do: nil
+  defp project_item_to_issue(_item, _opts), do: nil
 
   @spec active_project_item?(map(), [String.t()]) :: boolean()
   defp active_project_item?(item, active_states) do

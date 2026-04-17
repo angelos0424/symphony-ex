@@ -8,18 +8,24 @@ defmodule SymphonyEx.GitHub.IssueBodyMetadata do
           paths: [String.t()],
           release: String.t() | nil,
           conflict_hints: [String.t()],
-          missing_required_fields: [atom()]
+          missing_required_fields: [atom()],
+          target_branch: String.t() | nil,
+          target_pr: pos_integer() | nil
         }
 
   defstruct service: nil,
             paths: [],
             release: nil,
             conflict_hints: [],
-            missing_required_fields: []
+            missing_required_fields: [],
+            target_branch: nil,
+            target_pr: nil
 
   @service_keys MapSet.new(["service", "services"])
   @path_keys MapSet.new(["path", "paths"])
   @release_keys MapSet.new(["release"])
+  @target_branch_keys MapSet.new(["target-branch", "target_branch", "branch", "working-branch", "working_branch", "작업 브랜치"])
+  @target_pr_keys MapSet.new(["target-pr", "target_pr", "pr", "existing-pr", "existing_pr", "existing pr"])
 
   @conflict_hint_prefixes %{
     "scope" => nil,
@@ -60,13 +66,13 @@ defmodule SymphonyEx.GitHub.IssueBodyMetadata do
         values = parse_values(raw_values)
 
         metadata
-        |> update_field(key, values)
+        |> update_field(key, values, raw_values)
         |> update_conflict_hints(key, values)
     end
   end
 
-  @spec update_field(t(), String.t(), [String.t()]) :: t()
-  defp update_field(metadata, key, values) do
+  @spec update_field(t(), String.t(), [String.t()], String.t()) :: t()
+  defp update_field(metadata, key, values, raw_value) do
     cond do
       MapSet.member?(@service_keys, key) and values != [] ->
         %{metadata | service: List.last(values)}
@@ -76,6 +82,18 @@ defmodule SymphonyEx.GitHub.IssueBodyMetadata do
 
       MapSet.member?(@release_keys, key) and values != [] ->
         %{metadata | release: List.last(values)}
+
+      MapSet.member?(@target_branch_keys, key) ->
+        case normalize_branch_value(raw_value) do
+          nil -> metadata
+          branch -> %{metadata | target_branch: branch}
+        end
+
+      MapSet.member?(@target_pr_keys, key) ->
+        case extract_pr_number(raw_value) do
+          nil -> metadata
+          pr_number -> %{metadata | target_pr: pr_number}
+        end
 
       true ->
         metadata
@@ -124,6 +142,33 @@ defmodule SymphonyEx.GitHub.IssueBodyMetadata do
     |> to_string()
     |> String.trim()
     |> String.downcase()
+  end
+
+  @spec normalize_branch_value(String.t()) :: String.t() | nil
+  defp normalize_branch_value(value) do
+    value
+    |> to_string()
+    |> String.trim()
+    |> String.trim_leading("`")
+    |> String.trim_trailing("`")
+    |> case do
+      "" -> nil
+      branch -> branch
+    end
+  end
+
+  @spec extract_pr_number(String.t()) :: pos_integer() | nil
+  defp extract_pr_number(value) do
+    value
+    |> to_string()
+    |> String.trim()
+    |> then(fn trimmed ->
+      Regex.run(~r/(?:^|\b#|\/pull\/)(\d+)\b/, trimmed, capture: :all_but_first)
+    end)
+    |> case do
+      [value] -> String.to_integer(value)
+      _other -> nil
+    end
   end
 
   @spec blank?(String.t() | nil) :: boolean()

@@ -32,6 +32,21 @@ defmodule SymphonyEx.GitHub.IssueBodyMetadataTest do
     assert IssueBodyMetadata.parse("Service: api").missing_required_fields == [:paths]
   end
 
+  test "parses optional target branch and target pr metadata aliases" do
+    body = """
+    Service: API
+    Paths: lib/symphony_ex/orchestrator.ex
+    Target-Branch: codex/issue-14-design-audit-apply
+    Existing PR: https://github.com/example/repo/pull/19
+    """
+
+    metadata = IssueBodyMetadata.parse(body)
+
+    assert metadata.target_branch == "codex/issue-14-design-audit-apply"
+    assert metadata.target_pr == 19
+    assert metadata.missing_required_fields == []
+  end
+
   test "ignores empty metadata values and stray separators" do
     body = """
     Service: ,

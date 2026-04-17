@@ -110,19 +110,21 @@ defmodule SymphonyEx.GitHub.AdapterTest do
     assert issue.url == "https://github.com/example/repo/issues/12"
   end
 
-  test "extracts assignees and conflict hints from GitHub issue payloads" do
+  test "extracts assignees, conflict hints, and explicit branch metadata from GitHub issue payloads" do
     payload = %{
       "id" => 101,
       "number" => 12,
       "title" => "Implement tracker abstraction",
       "body" =>
-        "Service: api\nPaths: lib/symphony_ex/orchestrator.ex, README.md\nRelease: 2026.03",
+        "Service: api\nPaths: lib/symphony_ex/orchestrator.ex, README.md\nRelease: 2026.03\nTarget-Branch: codex/issue-14-design-audit-apply\nTarget-PR: 19",
       "state" => "open",
       "assignees" => [%{"login" => "codex-bot"}, %{"login" => "reviewer-bot"}]
     }
 
     assert %Issue{} = issue = Adapter.to_issue(payload)
     assert issue.assignees == ["codex-bot", "reviewer-bot"]
+    assert issue.target_branch == "codex/issue-14-design-audit-apply"
+    assert issue.target_pr == 19
 
     assert issue.conflict_hints == [
              "service:api",
@@ -130,6 +132,45 @@ defmodule SymphonyEx.GitHub.AdapterTest do
              "path:readme.md",
              "release:2026.03"
            ]
+  end
+
+  test "resolves target branch from existing pr metadata when branch is omitted" do
+    payload = %{
+      "id" => 101,
+      "number" => 12,
+      "title" => "Implement tracker abstraction",
+      "body" =>
+        "Service: api\nPaths: lib/symphony_ex/orchestrator.ex\nExisting PR: https://github.com/example/repo/pull/19",
+      "state" => "open"
+    }
+
+    request_fun = fn request ->
+      case {request.method, to_string(request.url)} do
+        {:get, "https://api.github.com/repos/example/repo/pulls/19"} ->
+          {:ok,
+           %Req.Response{
+             status: 200,
+             body: %{
+               "number" => 19,
+               "head" => %{"ref" => "codex/issue-14-design-audit-apply"}
+             }
+           }}
+
+        other ->
+          flunk("unexpected request: #{inspect(other)}")
+      end
+    end
+
+    issue =
+      Adapter.to_issue(payload,
+        api_key: "gh-token",
+        owner: "example",
+        repo: "repo",
+        request_fun: request_fun
+      )
+
+    assert issue.target_pr == 19
+    assert issue.target_branch == "codex/issue-14-design-audit-apply"
   end
 
   test "fetch_issue_by_identifier enriches issues with blocking dependency identifiers" do
