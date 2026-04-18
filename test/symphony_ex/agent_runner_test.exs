@@ -560,6 +560,42 @@ defmodule SymphonyEx.AgentRunnerTest do
     assert result.status == :success
   end
 
+  test "rejects unrelated existing PRs when issue targets a specific PR branch" do
+    workspace_path = tmp_workspace("required-body-target-pr")
+    workflow_path = write_workflow(workspace_path)
+
+    issue = %Issue{
+      issue_fixture("SYM-312")
+      | description: "이슈 본문에 업데이트",
+        target_pr: 19,
+        target_branch: "codex/issue-19-branch"
+    }
+
+    Application.put_env(:symphony_ex, :agent_runner_issue_body_fetcher, fn _issue ->
+      {:ok, issue.description}
+    end)
+
+    Application.put_env(:symphony_ex, :agent_runner_issue_pr_fetcher, fn _issue ->
+      {:ok, [%{"number" => 18, "body" => "Fixes #SYM-312", "headRefName" => "codex/issue-SYM-312-branch"}]}
+    end)
+
+    on_exit(fn ->
+      Application.delete_env(:symphony_ex, :agent_runner_issue_body_fetcher)
+      Application.delete_env(:symphony_ex, :agent_runner_issue_pr_fetcher)
+    end)
+
+    result =
+      AgentRunner.run(issue,
+        workspace_path: workspace_path,
+        workflow_path: workflow_path,
+        codex: [command: "codex app-server"],
+        app_server: MockAppServer
+      )
+
+    assert result.status == :failed
+    assert result.error_category == "required_output_missing"
+  end
+
   test "fails before startup when a referenced gstack skill is missing" do
     workspace_path = tmp_workspace("missing-skill")
     workflow_path = write_workflow(workspace_path)

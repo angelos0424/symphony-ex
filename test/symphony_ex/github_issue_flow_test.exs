@@ -263,7 +263,8 @@ defmodule SymphonyEx.GitHubIssueFlowTest do
     assert Enum.any?(control.issue_comments, &String.contains?(&1, "status: running"))
     assert Enum.any?(control.issue_comments, &String.contains?(&1, "result: success"))
     assert Enum.any?(control.issue_bodies, &String.contains?(&1, "## Symphony Status"))
-    assert Enum.any?(control.issue_bodies, &String.contains?(&1, "- Final status: pr_created"))
+    assert Enum.any?(control.issue_bodies, &String.contains?(&1, "- Final status: in_review"))
+    assert Enum.any?(control.issue_bodies, &String.contains?(&1, "- Pull request: none"))
   end
 
   test "skips ambiguous issues with a visible missing metadata reason" do

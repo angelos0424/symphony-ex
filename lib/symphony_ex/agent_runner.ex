@@ -691,7 +691,7 @@ defmodule SymphonyEx.AgentRunner do
       body_updated =
         normalize_issue_body(latest_body) != normalize_issue_body(issue.description || "")
 
-      {:ok, body_updated or pr_exists_for_issue?(issue, prs)}
+      {:ok, body_updated or pr_exists_for_issue(issue, prs)}
     end
   end
 
@@ -709,17 +709,41 @@ defmodule SymphonyEx.AgentRunner do
     Client.list_pull_requests(github_client_opts())
   end
 
-  @spec pr_exists_for_issue?(Issue.t(), [map()]) :: boolean()
-  defp pr_exists_for_issue?(%Issue{} = issue, prs) do
+  @spec pr_exists_for_issue(Issue.t(), [map()]) :: boolean()
+  defp pr_exists_for_issue(%Issue{} = issue, prs) do
+    Enum.any?(prs, &related_pr_matches_issue?(&1, issue))
+  end
+
+  @spec related_pr_matches_issue?(map(), Issue.t()) :: boolean()
+  defp related_pr_matches_issue?(pr, %Issue{} = issue) do
+    pr_number = pr["number"]
+    body = pr["body"] || ""
+    head_ref = get_in(pr, ["head", "ref"]) || pr["headRefName"] || ""
     issue_number = to_string(issue.identifier)
 
-    Enum.any?(prs, fn pr ->
-      body = pr["body"] || ""
-      head_ref = get_in(pr, ["head", "ref"]) || pr["headRefName"] || ""
+    explicit_target_match? =
+      cond do
+        is_integer(issue.target_pr) and is_binary(issue.target_branch) ->
+          pr_number == issue.target_pr and head_ref == issue.target_branch
 
-      String.contains?(body, "##{issue_number}") or
-        String.contains?(head_ref, "issue-#{issue_number}")
-    end)
+        is_integer(issue.target_pr) ->
+          pr_number == issue.target_pr
+
+        is_binary(issue.target_branch) and String.trim(issue.target_branch) != "" ->
+          head_ref == issue.target_branch
+
+        true ->
+          nil
+      end
+
+    case explicit_target_match? do
+      nil ->
+        String.contains?(body, "##{issue_number}") or
+          String.contains?(head_ref, "issue-#{issue_number}")
+
+      value ->
+        value
+    end
   end
 
   @spec github_client_opts() :: keyword()

@@ -179,16 +179,22 @@ defmodule SymphonyEx.GitHub.Adapter do
 
   @spec render_issue_status_summary(Issue.t(), map(), keyword()) :: String.t()
   defp render_issue_status_summary(%Issue{} = issue, attrs, opts) do
+    related_pr = latest_related_pr(issue, attrs, opts)
+
     pr_line =
-      case latest_related_pr(issue, attrs, opts) do
+      case related_pr do
         nil -> "- Pull request: none"
         pr -> "- Pull request: PR ##{pr["number"]} #{pr["html_url"]}"
       end
 
     outcome =
       cond do
-        Map.get(attrs, :status) == :released and Map.get(attrs, :result) == :success ->
+        Map.get(attrs, :status) == :released and Map.get(attrs, :result) == :success and
+            not is_nil(related_pr) ->
           "pr_created"
+
+        Map.get(attrs, :status) == :released and Map.get(attrs, :result) == :success ->
+          "in_review"
 
         Map.get(attrs, :status) == :released and Map.get(attrs, :result) == :failed ->
           "failed"
@@ -214,22 +220,46 @@ defmodule SymphonyEx.GitHub.Adapter do
     if Map.get(attrs, :result) == :success do
       case Client.list_pull_requests(opts) do
         {:ok, prs} when is_list(prs) ->
-          issue_number = to_string(issue.identifier)
-
           prs
-          |> Enum.filter(fn pr ->
-            body = pr["body"] || ""
-            head_ref = get_in(pr, ["head", "ref"]) || pr["headRefName"] || ""
-
-            String.contains?(body, "##{issue_number}") or
-              String.contains?(head_ref, "issue-#{issue_number}")
-          end)
+          |> Enum.filter(&related_pr_matches_issue?(&1, issue))
           |> Enum.sort_by(&(&1["created_at"] || &1["createdAt"] || ""), :desc)
           |> List.first()
 
         _ ->
           nil
       end
+    end
+  end
+
+  @spec related_pr_matches_issue?(map(), Issue.t()) :: boolean()
+  defp related_pr_matches_issue?(pr, %Issue{} = issue) do
+    pr_number = pr["number"]
+    head_ref = get_in(pr, ["head", "ref"]) || pr["headRefName"] || ""
+    body = pr["body"] || ""
+    issue_number = to_string(issue.identifier)
+
+    explicit_target_match? =
+      cond do
+        is_integer(issue.target_pr) and is_binary(issue.target_branch) ->
+          pr_number == issue.target_pr and head_ref == issue.target_branch
+
+        is_integer(issue.target_pr) ->
+          pr_number == issue.target_pr
+
+        is_binary(issue.target_branch) and String.trim(issue.target_branch) != "" ->
+          head_ref == issue.target_branch
+
+        true ->
+          nil
+      end
+
+    case explicit_target_match? do
+      nil ->
+        String.contains?(body, "##{issue_number}") or
+          String.contains?(head_ref, "issue-#{issue_number}")
+
+      value ->
+        value
     end
   end
 

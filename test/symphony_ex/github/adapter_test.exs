@@ -527,6 +527,12 @@ defmodule SymphonyEx.GitHub.AdapterTest do
     released_requests = collect_requests(6)
 
     assert Enum.any?(released_requests, fn request ->
+             request.method == :patch and
+               String.contains?(request.options[:json][:body] || "", "- Final status: in_review") and
+               String.contains?(request.options[:json][:body] || "", "- Pull request: none")
+           end)
+
+    assert Enum.any?(released_requests, fn request ->
              request.method == :post and
                request.options[:json][:labels] == ["symphony", "symphony:done"]
            end)
