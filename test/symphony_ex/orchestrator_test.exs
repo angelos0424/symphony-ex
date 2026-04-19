@@ -1,7 +1,7 @@
 defmodule SymphonyEx.OrchestratorTest do
   use ExUnit.Case, async: false
 
-  alias SymphonyEx.Domain.Issue
+  alias SymphonyEx.Domain.{Events, Issue}
   alias SymphonyEx.Orchestrator
 
   defmodule Control do
@@ -307,6 +307,64 @@ defmodule SymphonyEx.OrchestratorTest do
     assert Enum.any?(Control.comments(), fn %{issue_identifier: identifier, body: body} ->
              identifier == "SUMMARY-1" and body =~ "## Symphony 작업 요약" and
                body =~ "files touched"
+           end)
+  end
+
+  test "posts a completion summary comment from nested event content when last_message is nil" do
+    issue = issue_fixture("SUMMARY-2")
+
+    start_supervised!(
+      {Control,
+       test_pid: self(),
+       candidate_batches: [[issue], []],
+       run_results: [
+         %{
+           status: :success,
+           error: nil,
+           last_message: nil,
+           events: [
+             %Events{
+               event: :notification,
+               timestamp: DateTime.utc_now() |> DateTime.to_iso8601(),
+               raw_method: "notification",
+               message: nil,
+               params: %{
+                 "data" => %{
+                   "content" =>
+                     "- updated verse card layouts\n- synced branch with PR #19\n- verified remote push"
+                 }
+               }
+             }
+           ]
+         }
+       ]}
+    )
+
+    orchestrator =
+      start_supervised!(
+        {Orchestrator,
+         tracker: MockTracker,
+         workspace: MockWorkspace,
+         agent_runner: MockAgentRunner,
+         tracker_opts: [],
+         workspace_opts: [],
+         workflow_path: "/tmp/WORKFLOW.md",
+         codex: [],
+         poll_interval_ms: 25,
+         retry_backoff_ms: 10,
+         max_retry_backoff_ms: 10,
+         max_concurrent: 1,
+         task_supervisor: SymphonyEx.TestAgentWorkers}
+      )
+
+    wait_until(fn ->
+      snapshot = Orchestrator.snapshot(orchestrator)
+      map_size(snapshot.running) == 0 and length(snapshot.completed) == 1
+    end)
+
+    assert Enum.any?(Control.comments(), fn %{issue_identifier: identifier, body: body} ->
+             identifier == "SUMMARY-2" and body =~ "## Symphony 작업 요약" and
+               body =~ "verified remote push"
            end)
   end
 

@@ -785,6 +785,7 @@ defmodule SymphonyEx.Orchestrator do
       recovery_count: result[:recovery_count] || 0,
       last_event: result[:last_event],
       last_message: result[:last_message],
+      events: result[:events] || [],
       error: result[:error],
       error_category: result[:error_category]
     }
@@ -820,24 +821,78 @@ defmodule SymphonyEx.Orchestrator do
 
   @spec completion_summary_comment_body(map()) :: String.t() | nil
   defp completion_summary_comment_body(metadata) do
-    case metadata[:last_message] do
-      message when is_binary(message) ->
-        trimmed = String.trim(message)
-
-        if trimmed == "" do
-          nil
-        else
-          [
-            "## Symphony 작업 요약",
-            trimmed
-          ]
-          |> Enum.join("\n\n")
-        end
-
-      _ ->
-        nil
+    metadata
+    |> completion_summary_text()
+    |> case do
+      nil -> nil
+      trimmed -> ["## Symphony 작업 요약", trimmed] |> Enum.join("\n\n")
     end
   end
+
+  @spec completion_summary_text(map()) :: String.t() | nil
+  defp completion_summary_text(metadata) do
+    metadata[:last_message]
+    |> normalize_summary_text()
+    |> case do
+      nil ->
+        metadata[:events]
+        |> List.wrap()
+        |> Enum.find_value(&event_summary_text/1)
+
+      trimmed ->
+        trimmed
+    end
+  end
+
+  @spec event_summary_text(term()) :: String.t() | nil
+  defp event_summary_text(%{message: message, params: params}) do
+    normalize_summary_text(message) || extract_text_from_payload(params)
+  end
+
+  defp event_summary_text(_), do: nil
+
+  @spec normalize_summary_text(term()) :: String.t() | nil
+  defp normalize_summary_text(message) when is_binary(message) do
+    case String.trim(message) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  defp normalize_summary_text(_), do: nil
+
+  @summary_text_keys [
+    "message",
+    "content",
+    "text",
+    "summary",
+    "output_text",
+    "output",
+    "final_message",
+    "final_output"
+  ]
+
+  @spec extract_text_from_payload(term()) :: String.t() | nil
+  defp extract_text_from_payload(payload) when is_map(payload) do
+    direct_match =
+      Enum.find_value(@summary_text_keys, fn key ->
+        payload |> Map.get(key) |> normalize_summary_text()
+      end)
+
+    if direct_match do
+      direct_match
+    else
+      payload
+      |> Map.values()
+      |> Enum.find_value(&extract_text_from_payload/1)
+    end
+  end
+
+  defp extract_text_from_payload(payload) when is_list(payload) do
+    Enum.find_value(payload, &extract_text_from_payload/1)
+  end
+
+  defp extract_text_from_payload(_), do: nil
 
   @spec publish_snapshot(map()) :: map()
   defp publish_snapshot(state) do
