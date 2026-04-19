@@ -111,8 +111,7 @@ defmodule SymphonyEx.WorkflowStore do
 
     with {:module, _} <- Code.ensure_loaded(watcher_module),
          {:ok, watcher} <- watcher_module.start_link(dirs: [Path.dirname(state.workflow_path)]),
-         :ok <- watcher_module.subscribe(watcher),
-         :ok <- watcher_module.start(watcher) do
+         :ok <- watcher_module.subscribe(watcher) do
       %{state | watcher: watcher}
     else
       error ->

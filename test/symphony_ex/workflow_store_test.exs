@@ -7,16 +7,11 @@ defmodule SymphonyEx.WorkflowStoreTest do
     use Agent
 
     def start_link(opts) do
-      Agent.start_link(fn -> %{opts: opts, subscribed: false, started: false} end)
+      Agent.start_link(fn -> %{opts: opts, subscribed: false} end)
     end
 
     def subscribe(server) do
       Agent.update(server, &Map.put(&1, :subscribed, true))
-      :ok
-    end
-
-    def start(server) do
-      Agent.update(server, &Map.put(&1, :started, true))
       :ok
     end
   end
