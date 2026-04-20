@@ -30,7 +30,8 @@ defmodule SymphonyEx.OrchestratorTest do
       Agent.get_and_update(__MODULE__, fn state ->
         case state.candidate_batches do
           [batch | rest] ->
-            {batch, %{state | candidate_batches: rest, candidate_polls: state.candidate_polls + 1}}
+            {batch,
+             %{state | candidate_batches: rest, candidate_polls: state.candidate_polls + 1}}
 
           [] ->
             {[], %{state | candidate_polls: state.candidate_polls + 1}}
@@ -104,6 +105,7 @@ defmodule SymphonyEx.OrchestratorTest do
       Control.record_comment(issue_id, body)
       {:ok, %{}}
     end
+
     def update_issue_state(_issue, _state_name, _opts), do: {:ok, %{}}
     def update_issue_description(_issue_id, _description, _opts), do: {:ok, %{}}
 
@@ -128,7 +130,11 @@ defmodule SymphonyEx.OrchestratorTest do
     def run_lifecycle_hook(_name, _path, _opts, _issue), do: :ok
 
     def cleanup_inactive_worktrees(opts) do
-      send(Keyword.fetch!(opts, :test_pid), {:cleanup_called, Keyword.get(opts, :active_issue_identifiers, [])})
+      send(
+        Keyword.fetch!(opts, :test_pid),
+        {:cleanup_called, Keyword.get(opts, :active_issue_identifiers, [])}
+      )
+
       :ok
     end
   end
@@ -180,7 +186,11 @@ defmodule SymphonyEx.OrchestratorTest do
   end
 
   test "backs off candidate polling when GitHub rate limits are low" do
-    SymphonyEx.Observability.record_rate_limit(:github, %{remaining: 10, limit: 5000, reset: "1775174400"})
+    SymphonyEx.Observability.record_rate_limit(:github, %{
+      remaining: 10,
+      limit: 5000,
+      reset: "1775174400"
+    })
 
     start_supervised!({Control, test_pid: self(), candidate_batches: [[], []]})
 
@@ -278,7 +288,12 @@ defmodule SymphonyEx.OrchestratorTest do
        test_pid: self(),
        candidate_batches: [[issue], []],
        run_results: [
-         %{status: :success, events: [], error: nil, last_message: "- what changed\n- files touched\n- validation performed"}
+         %{
+           status: :success,
+           events: [],
+           error: nil,
+           last_message: "- what changed\n- files touched\n- validation performed"
+         }
        ]}
     )
 
@@ -365,6 +380,140 @@ defmodule SymphonyEx.OrchestratorTest do
     assert Enum.any?(Control.comments(), fn %{issue_identifier: identifier, body: body} ->
              identifier == "SUMMARY-2" and body =~ "## Symphony 작업 요약" and
                body =~ "verified remote push"
+           end)
+  end
+
+  test "prefers the latest summary-bearing event over earlier prompt-like payloads" do
+    issue = issue_fixture("SUMMARY-3")
+
+    start_supervised!(
+      {Control,
+       test_pid: self(),
+       candidate_batches: [[issue], []],
+       run_results: [
+         %{
+           status: :success,
+           error: nil,
+           last_message: nil,
+           events: [
+             %Events{
+               event: :turn_completed,
+               timestamp: DateTime.utc_now() |> DateTime.to_iso8601(),
+               raw_method: "turn.completed",
+               message: nil,
+               params: %{
+                 "input" => [
+                   %{
+                     "type" => "text",
+                     "text" =>
+                       "You are an unattended coding agent working on GitHub issue 29\n\n## Operating Rules"
+                   }
+                 ]
+               }
+             },
+             %Events{
+               event: :notification,
+               timestamp: DateTime.utc_now() |> DateTime.to_iso8601(),
+               raw_method: "notification",
+               message: nil,
+               params: %{
+                 "data" => %{
+                   "content" => "- what changed\n- files touched\n- validation performed"
+                 }
+               }
+             }
+           ]
+         }
+       ]}
+    )
+
+    orchestrator =
+      start_supervised!(
+        {Orchestrator,
+         tracker: MockTracker,
+         workspace: MockWorkspace,
+         agent_runner: MockAgentRunner,
+         tracker_opts: [],
+         workspace_opts: [],
+         workflow_path: "/tmp/WORKFLOW.md",
+         codex: [],
+         poll_interval_ms: 25,
+         retry_backoff_ms: 10,
+         max_retry_backoff_ms: 10,
+         max_concurrent: 1,
+         task_supervisor: SymphonyEx.TestAgentWorkers}
+      )
+
+    wait_until(fn ->
+      snapshot = Orchestrator.snapshot(orchestrator)
+      map_size(snapshot.running) == 0 and length(snapshot.completed) == 1
+    end)
+
+    assert Enum.any?(Control.comments(), fn %{issue_identifier: identifier, body: body} ->
+             identifier == "SUMMARY-3" and body =~ "validation performed" and
+               body =~ "files touched" and
+               not String.contains?(body, "You are an unattended coding agent") and
+               not String.contains?(body, "## Operating Rules")
+           end)
+  end
+
+  test "skips summary comments when only request prompt payload is available" do
+    issue = issue_fixture("SUMMARY-4")
+
+    start_supervised!(
+      {Control,
+       test_pid: self(),
+       candidate_batches: [[issue], []],
+       run_results: [
+         %{
+           status: :success,
+           error: nil,
+           last_message: nil,
+           events: [
+             %Events{
+               event: :turn_completed,
+               timestamp: DateTime.utc_now() |> DateTime.to_iso8601(),
+               raw_method: "turn.completed",
+               message: nil,
+               params: %{
+                 "input" => [
+                   %{
+                     "type" => "text",
+                     "text" =>
+                       "You are an unattended coding agent working on GitHub issue 29\n\n## Final Response Format"
+                   }
+                 ]
+               }
+             }
+           ]
+         }
+       ]}
+    )
+
+    orchestrator =
+      start_supervised!(
+        {Orchestrator,
+         tracker: MockTracker,
+         workspace: MockWorkspace,
+         agent_runner: MockAgentRunner,
+         tracker_opts: [],
+         workspace_opts: [],
+         workflow_path: "/tmp/WORKFLOW.md",
+         codex: [],
+         poll_interval_ms: 25,
+         retry_backoff_ms: 10,
+         max_retry_backoff_ms: 10,
+         max_concurrent: 1,
+         task_supervisor: SymphonyEx.TestAgentWorkers}
+      )
+
+    wait_until(fn ->
+      snapshot = Orchestrator.snapshot(orchestrator)
+      map_size(snapshot.running) == 0 and length(snapshot.completed) == 1
+    end)
+
+    refute Enum.any?(Control.comments(), fn %{issue_identifier: identifier, body: body} ->
+             identifier == "SUMMARY-4" and body =~ "## Symphony 작업 요약"
            end)
   end
 
@@ -640,11 +789,7 @@ defmodule SymphonyEx.OrchestratorTest do
   test "writes GitHub-visible gating reason for blocked issues and dedupes repeated skips" do
     blocked = issue_fixture("BLOCKED-1", labels: ["blocked"])
 
-    start_supervised!(
-      {Control,
-       test_pid: self(),
-       candidate_batches: [[blocked], [blocked], []]}
-    )
+    start_supervised!({Control, test_pid: self(), candidate_batches: [[blocked], [blocked], []]})
 
     orchestrator = start_orchestrator(max_concurrent: 1)
 

@@ -270,6 +270,47 @@ defmodule SymphonyEx.AgentRunnerTest do
     def get_events(server), do: Agent.get(server, & &1.events)
   end
 
+  defmodule LastMessageAppServer do
+    use Agent
+
+    def start_link(_opts) do
+      Agent.start_link(fn -> %{} end)
+    end
+
+    def subscribe(_server, _pid \\ self()), do: :ok
+    def initialize(_server), do: {:ok, %{"supportsThreadReuse" => true, "supportsEvents" => true}}
+    def capabilities(_server), do: %{supports_thread_reuse: true, supports_events: true}
+    def start_thread(_server, _params), do: {:ok, %{"threadId" => "thread-last-message"}}
+    def alive?(_server), do: true
+    def cancel_turn(_server), do: :ok
+    def shutdown(server), do: Agent.stop(server, :normal, 1_000)
+
+    def start_turn(server, _params) do
+      earlier = %Events{
+        event: :agent_message,
+        timestamp: DateTime.utc_now() |> DateTime.to_iso8601(),
+        raw_method: "agent_message",
+        message: "earlier progress update",
+        params: %{"turnId" => "turn-last-message"}
+      }
+
+      latest = %Events{
+        event: :turn_completed,
+        timestamp: DateTime.utc_now() |> DateTime.to_iso8601(),
+        raw_method: "turn.completed",
+        message: "latest final summary",
+        params: %{"turnId" => "turn-last-message"},
+        usage: %{input_tokens: 1, output_tokens: 1, total_tokens: 2}
+      }
+
+      Agent.update(server, fn _state -> %{events: [earlier, latest]} end)
+      send(self(), {:app_server_event, latest})
+      {:ok, %{"turnId" => "turn-last-message"}}
+    end
+
+    def get_events(server), do: Agent.get(server, & &1.events)
+  end
+
   test "reuses recoverable thread metadata and clears session file on success" do
     workspace_path = tmp_workspace("recovery-success")
     workflow_path = write_workflow(workspace_path)
@@ -496,6 +537,23 @@ defmodule SymphonyEx.AgentRunnerTest do
     assert session.error_category == "blocked"
   end
 
+  test "captures the latest event message as last_message" do
+    workspace_path = tmp_workspace("last-message-order")
+    workflow_path = write_workflow(workspace_path)
+    issue = issue_fixture("SYM-309A")
+
+    result =
+      AgentRunner.run(issue,
+        workspace_path: workspace_path,
+        workflow_path: workflow_path,
+        codex: [command: "codex app-server"],
+        app_server: LastMessageAppServer
+      )
+
+    assert result.status == :success
+    assert result.last_message == "latest final summary"
+  end
+
   test "fails success verification when issue body update was required but not performed" do
     workspace_path = tmp_workspace("required-body-update")
     workflow_path = write_workflow(workspace_path)
@@ -576,7 +634,14 @@ defmodule SymphonyEx.AgentRunnerTest do
     end)
 
     Application.put_env(:symphony_ex, :agent_runner_issue_pr_fetcher, fn _issue ->
-      {:ok, [%{"number" => 18, "body" => "Fixes #SYM-312", "headRefName" => "codex/issue-SYM-312-branch"}]}
+      {:ok,
+       [
+         %{
+           "number" => 18,
+           "body" => "Fixes #SYM-312",
+           "headRefName" => "codex/issue-SYM-312-branch"
+         }
+       ]}
     end)
 
     on_exit(fn ->

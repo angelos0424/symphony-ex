@@ -832,11 +832,12 @@ defmodule SymphonyEx.Orchestrator do
   @spec completion_summary_text(map()) :: String.t() | nil
   defp completion_summary_text(metadata) do
     metadata[:last_message]
-    |> normalize_summary_text()
+    |> candidate_summary_text()
     |> case do
       nil ->
         metadata[:events]
         |> List.wrap()
+        |> Enum.reverse()
         |> Enum.find_value(&event_summary_text/1)
 
       trimmed ->
@@ -844,9 +845,12 @@ defmodule SymphonyEx.Orchestrator do
     end
   end
 
+  @summary_candidate_events [:agent_message, :notification, :turn_completed]
+
   @spec event_summary_text(term()) :: String.t() | nil
-  defp event_summary_text(%{message: message, params: params}) do
-    normalize_summary_text(message) || extract_text_from_payload(params)
+  defp event_summary_text(%{event: event, message: message, params: params})
+       when event in @summary_candidate_events do
+    candidate_summary_text(message) || extract_text_from_payload(params)
   end
 
   defp event_summary_text(_), do: nil
@@ -861,6 +865,29 @@ defmodule SymphonyEx.Orchestrator do
 
   defp normalize_summary_text(_), do: nil
 
+  @prompt_like_summary_markers [
+    "you are an unattended coding agent",
+    "## operating rules",
+    "## final response format"
+  ]
+
+  @spec candidate_summary_text(term()) :: String.t() | nil
+  defp candidate_summary_text(message) do
+    message
+    |> normalize_summary_text()
+    |> case do
+      nil -> nil
+      trimmed -> if(is_prompt_like_summary?(trimmed), do: nil, else: trimmed)
+    end
+  end
+
+  @spec is_prompt_like_summary?(String.t()) :: boolean()
+  defp is_prompt_like_summary?(text) do
+    normalized = String.downcase(text)
+
+    Enum.any?(@prompt_like_summary_markers, &String.contains?(normalized, &1))
+  end
+
   @summary_text_keys [
     "message",
     "content",
@@ -872,27 +899,52 @@ defmodule SymphonyEx.Orchestrator do
     "final_output"
   ]
 
+  @summary_ignored_payload_keys ["input", "instructions", "prompt", "system_prompt"]
+
   @spec extract_text_from_payload(term()) :: String.t() | nil
-  defp extract_text_from_payload(payload) when is_map(payload) do
+  defp extract_text_from_payload(payload), do: extract_text_from_payload(payload, [])
+
+  @spec extract_text_from_payload(term(), [String.t()]) :: String.t() | nil
+  defp extract_text_from_payload(payload, path) when is_map(payload) do
     direct_match =
       Enum.find_value(@summary_text_keys, fn key ->
-        payload |> Map.get(key) |> normalize_summary_text()
+        if summary_payload_path_ignored?([key | path]) do
+          nil
+        else
+          payload |> Map.get(key) |> candidate_summary_text()
+        end
       end)
 
     if direct_match do
       direct_match
     else
       payload
-      |> Map.values()
-      |> Enum.find_value(&extract_text_from_payload/1)
+      |> Enum.find_value(fn {key, value} ->
+        key = to_string(key)
+
+        if summary_payload_path_ignored?([key | path]) do
+          nil
+        else
+          extract_text_from_payload(value, [key | path])
+        end
+      end)
     end
   end
 
-  defp extract_text_from_payload(payload) when is_list(payload) do
-    Enum.find_value(payload, &extract_text_from_payload/1)
+  defp extract_text_from_payload(payload, path) when is_list(payload) do
+    if summary_payload_path_ignored?(path) do
+      nil
+    else
+      Enum.find_value(payload, &extract_text_from_payload(&1, path))
+    end
   end
 
-  defp extract_text_from_payload(_), do: nil
+  defp extract_text_from_payload(_, _), do: nil
+
+  @spec summary_payload_path_ignored?([String.t()]) :: boolean()
+  defp summary_payload_path_ignored?(path) do
+    Enum.any?(path, &(&1 in @summary_ignored_payload_keys))
+  end
 
   @spec publish_snapshot(map()) :: map()
   defp publish_snapshot(state) do

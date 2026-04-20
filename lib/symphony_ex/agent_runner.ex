@@ -501,6 +501,7 @@ defmodule SymphonyEx.AgentRunner do
   @spec extract_last_message([Events.t()]) :: String.t() | nil
   defp extract_last_message(events) do
     events
+    |> Enum.reverse()
     |> Enum.find_value(fn
       %Events{message: msg} when is_binary(msg) and msg != "" -> msg
       _ -> nil
