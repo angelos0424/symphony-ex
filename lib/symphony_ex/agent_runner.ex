@@ -519,11 +519,22 @@ defmodule SymphonyEx.AgentRunner do
 
   @spec extract_last_event_name([Events.t()]) :: String.t() | nil
   defp extract_last_event_name([]), do: nil
-  defp extract_last_event_name([event | _]), do: Atom.to_string(event.event)
+
+  defp extract_last_event_name(events) do
+    events
+    |> Enum.reverse()
+    |> List.first()
+    |> case do
+      nil -> nil
+      event -> Atom.to_string(event.event)
+    end
+  end
 
   @spec extract_last_usage([Events.t()]) :: Events.usage() | nil
   defp extract_last_usage(events) do
-    Enum.find_value(events, fn
+    events
+    |> Enum.reverse()
+    |> Enum.find_value(fn
       %Events{usage: %{} = usage} -> usage
       _ -> nil
     end)
@@ -531,7 +542,9 @@ defmodule SymphonyEx.AgentRunner do
 
   @spec extract_last_turn_id([Events.t()]) :: String.t() | nil
   defp extract_last_turn_id(events) do
-    Enum.find_value(events, fn
+    events
+    |> Enum.reverse()
+    |> Enum.find_value(fn
       %Events{params: %{} = params} -> params["turnId"] || params["turn_id"]
       _ -> nil
     end)

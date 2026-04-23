@@ -597,6 +597,8 @@ defmodule SymphonyEx.AgentRunnerTest do
 
     assert result.status == :success
     assert result.last_message == "latest final summary"
+    assert result.last_event == "turn_completed"
+    assert result.turn_id == "turn-last-message"
   end
 
   test "fails success verification when issue body update was required but not performed" do
