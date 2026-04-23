@@ -11,6 +11,12 @@ defmodule SymphonyEx.WorkspaceTest do
     end
   end
 
+  defmodule OpenIssueTracker do
+    def fetch_issue_by_identifier("21", _opts) do
+      {:ok, %Issue{id: "21", identifier: "21", title: "Open", description: "", state: "Todo"}}
+    end
+  end
+
   test "sanitizes workspace path from issue identifier" do
     issue = %Issue{
       id: "1",
@@ -284,8 +290,17 @@ defmodule SymphonyEx.WorkspaceTest do
       "git", ["worktree", "list", "--porcelain"], [cd: ^source_repo_path] ->
         {"worktree #{source_repo_path}\n", 0}
 
-      "git", ["worktree", "add", "--track", "-B", "codex/issue-14-design-audit-apply", ^path,
-              "refs/remotes/origin/codex/issue-14-design-audit-apply"], [cd: ^source_repo_path] ->
+      "git",
+      [
+        "worktree",
+        "add",
+        "--track",
+        "-B",
+        "codex/issue-14-design-audit-apply",
+        ^path,
+        "refs/remotes/origin/codex/issue-14-design-audit-apply"
+      ],
+      [cd: ^source_repo_path] ->
         send(parent, :added_target_branch)
         {"", 0}
     end
@@ -357,7 +372,12 @@ defmodule SymphonyEx.WorkspaceTest do
   end
 
   test "cleanup_inactive_worktrees removes closed issue worktrees" do
-    root = Path.join(System.tmp_dir!(), "symphony-workspace-cleanup-#{System.unique_integer([:positive])}")
+    root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-workspace-cleanup-#{System.unique_integer([:positive])}"
+      )
+
     source_repo_path = Path.join(root, "source")
     worktree_path = Path.join(root, "13")
 
@@ -398,6 +418,55 @@ defmodule SymphonyEx.WorkspaceTest do
              )
 
     assert_received :removed
+    refute File.exists?(worktree_path)
+  end
+
+  test "cleanup_inactive_worktrees removes stale orphan worktrees for open issues when no progress remains" do
+    root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-workspace-cleanup-#{System.unique_integer([:positive])}"
+      )
+
+    source_repo_path = Path.join(root, "source")
+    worktree_path = Path.join(root, "21")
+
+    File.mkdir_p!(source_repo_path)
+    File.mkdir_p!(worktree_path)
+
+    stale_updated_at =
+      DateTime.utc_now() |> DateTime.add(-3_600, :second) |> DateTime.to_iso8601()
+
+    assert {:ok, session} =
+             SessionStore.save(worktree_path, %{
+               issue_identifier: "21",
+               thread_id: nil,
+               turns_executed: 0,
+               capability_profile: %{},
+               recovery_count: 0,
+               phase: :running
+             })
+
+    stale_session = %{session | updated_at: stale_updated_at}
+    File.write!(SessionStore.session_path(worktree_path), Jason.encode!(stale_session) <> "\n")
+
+    shell = fn
+      "git", ["worktree", "list", "--porcelain"], [cd: ^source_repo_path] ->
+        {"worktree #{source_repo_path}\n", 0}
+
+      "git", ["worktree", "prune"], [cd: ^source_repo_path] ->
+        {"", 0}
+    end
+
+    assert :ok =
+             Workspace.cleanup_inactive_worktrees(
+               root: root,
+               source_repo_path: source_repo_path,
+               tracker: OpenIssueTracker,
+               shell_fun: shell,
+               stale_orphan_ttl_ms: 60_000
+             )
+
     refute File.exists?(worktree_path)
   end
 end

@@ -6,6 +6,8 @@ defmodule SymphonyEx.Workspace do
   alias SymphonyEx.Domain.Issue
   alias SymphonyEx.{SessionStore, SourceRepo}
 
+  @default_stale_orphan_ttl_ms :timer.hours(1)
+
   @type shell_fun :: (String.t(), [String.t()], keyword() -> {binary(), non_neg_integer()})
   @type prepare_reason :: :fresh | {:reset, atom()} | {:recover, SessionStore.session_data()}
   @type prepare_result :: %{path: String.t(), reason: prepare_reason()}
@@ -60,14 +62,24 @@ defmodule SymphonyEx.Workspace do
     tracker = Keyword.get(opts, :tracker)
     tracker_opts = Keyword.get(opts, :tracker_opts, [])
     active_issue_identifiers = MapSet.new(Keyword.get(opts, :active_issue_identifiers, []))
+    tracked_worktrees = MapSet.new(active_worktree_paths(source_repo_path, shell))
 
     if is_atom(tracker) do
       root
-      |> inactive_worktree_candidates(source_repo_path, shell)
-      |> Enum.reject(&(worktree_active_for_issue?(&1, active_issue_identifiers)))
+      |> inactive_worktree_candidates(source_repo_path, tracked_worktrees)
+      |> Enum.reject(&worktree_active_for_issue?(&1, active_issue_identifiers))
       |> Enum.each(fn {path, issue_identifier} ->
         if remove_inactive_worktree?(issue_identifier, tracker, tracker_opts) do
           _ = remove(path, opts)
+        end
+      end)
+
+      root
+      |> orphaned_worktree_candidates(source_repo_path, tracked_worktrees)
+      |> Enum.reject(&worktree_active_for_issue?(&1, active_issue_identifiers))
+      |> Enum.each(fn {path, issue_identifier} ->
+        if remove_orphaned_worktree?(path, issue_identifier, tracker, tracker_opts, opts) do
+          _ = remove_orphaned_path(path)
         end
       end)
     end
@@ -143,7 +155,8 @@ defmodule SymphonyEx.Workspace do
   end
 
   @spec worktree_add_args(String.t(), Issue.t()) :: [String.t()]
-  defp worktree_add_args(path, %Issue{target_branch: target_branch}) when is_binary(target_branch) do
+  defp worktree_add_args(path, %Issue{target_branch: target_branch})
+       when is_binary(target_branch) do
     branch = String.trim(target_branch)
 
     if branch == "" do
@@ -245,9 +258,9 @@ defmodule SymphonyEx.Workspace do
     end
   end
 
-  @spec inactive_worktree_candidates(String.t(), String.t(), shell_fun()) :: [{String.t(), String.t()}]
-  defp inactive_worktree_candidates(root, source_repo_path, shell) do
-    tracked_worktrees = MapSet.new(active_worktree_paths(source_repo_path, shell))
+  @spec inactive_worktree_candidates(String.t(), String.t(), MapSet.t(String.t())) ::
+          [{String.t(), String.t()}]
+  defp inactive_worktree_candidates(root, source_repo_path, tracked_worktrees) do
     expanded_source_repo_path = Path.expand(source_repo_path)
 
     if File.dir?(root) do
@@ -256,8 +269,35 @@ defmodule SymphonyEx.Workspace do
       |> Enum.map(&Path.join(root, &1))
       |> Enum.filter(fn path ->
         expanded = Path.expand(path)
+
         File.dir?(path) and expanded != expanded_source_repo_path and
           MapSet.member?(tracked_worktrees, expanded)
+      end)
+      |> Enum.flat_map(fn path ->
+        case issue_identifier_for_path(path) do
+          nil -> []
+          identifier -> [{path, identifier}]
+        end
+      end)
+    else
+      []
+    end
+  end
+
+  @spec orphaned_worktree_candidates(String.t(), String.t(), MapSet.t(String.t())) ::
+          [{String.t(), String.t()}]
+  defp orphaned_worktree_candidates(root, source_repo_path, tracked_worktrees) do
+    expanded_source_repo_path = Path.expand(source_repo_path)
+
+    if File.dir?(root) do
+      root
+      |> File.ls!()
+      |> Enum.map(&Path.join(root, &1))
+      |> Enum.filter(fn path ->
+        expanded = Path.expand(path)
+
+        File.dir?(path) and expanded != expanded_source_repo_path and
+          not MapSet.member?(tracked_worktrees, expanded)
       end)
       |> Enum.flat_map(fn path ->
         case issue_identifier_for_path(path) do
@@ -298,6 +338,55 @@ defmodule SymphonyEx.Workspace do
     end
   end
 
+  @spec remove_orphaned_worktree?(String.t(), String.t(), module(), keyword(), keyword()) ::
+          boolean()
+  defp remove_orphaned_worktree?(path, issue_identifier, tracker, tracker_opts, opts) do
+    case tracker.fetch_issue_by_identifier(issue_identifier, tracker_opts) do
+      {:ok, nil} ->
+        true
+
+      {:ok, %Issue{} = issue} ->
+        inactive_issue_state?(issue.state) or stale_orphaned_worktree?(path, opts)
+
+      {:error, _reason} ->
+        false
+    end
+  end
+
+  @spec stale_orphaned_worktree?(String.t(), keyword()) :: boolean()
+  defp stale_orphaned_worktree?(path, opts) do
+    ttl_ms = Keyword.get(opts, :stale_orphan_ttl_ms, @default_stale_orphan_ttl_ms)
+    now_ms = System.system_time(:millisecond)
+
+    case SessionStore.load(path) do
+      {:ok, nil} ->
+        stale_path_mtime?(path, ttl_ms, now_ms)
+
+      {:ok, session} ->
+        not SessionStore.recoverable?(session) and stale_session?(session, path, ttl_ms, now_ms)
+
+      {:error, _reason} ->
+        stale_path_mtime?(path, ttl_ms, now_ms)
+    end
+  end
+
+  @spec stale_session?(SessionStore.session_data(), String.t(), non_neg_integer(), integer()) ::
+          boolean()
+  defp stale_session?(session, path, ttl_ms, now_ms) do
+    case DateTime.from_iso8601(session.updated_at) do
+      {:ok, updated_at, _offset} -> now_ms - DateTime.to_unix(updated_at, :millisecond) >= ttl_ms
+      {:error, _reason} -> stale_path_mtime?(path, ttl_ms, now_ms)
+    end
+  end
+
+  @spec stale_path_mtime?(String.t(), non_neg_integer(), integer()) :: boolean()
+  defp stale_path_mtime?(path, ttl_ms, now_ms) do
+    case File.stat(path, time: :posix) do
+      {:ok, stat} -> now_ms - stat.mtime * 1000 >= ttl_ms
+      {:error, _reason} -> false
+    end
+  end
+
   @spec inactive_issue_state?(String.t() | nil) :: boolean()
   defp inactive_issue_state?(state) when is_binary(state) do
     normalized = state |> String.trim() |> String.downcase()
@@ -329,10 +418,15 @@ defmodule SymphonyEx.Workspace do
         {:error, {:worktree_path_already_active, path}}
 
       true ->
-        case File.rm_rf(path) do
-          {:ok, _removed} -> :ok
-          {:error, reason, _file} -> {:error, {:stale_worktree_cleanup_failed, reason, path}}
-        end
+        remove_orphaned_path(path)
+    end
+  end
+
+  @spec remove_orphaned_path(String.t()) :: :ok | {:error, term()}
+  defp remove_orphaned_path(path) do
+    case File.rm_rf(path) do
+      {:ok, _removed} -> :ok
+      {:error, reason, _file} -> {:error, {:stale_worktree_cleanup_failed, reason, path}}
     end
   end
 
