@@ -824,8 +824,14 @@ defmodule SymphonyEx.Orchestrator do
     metadata
     |> completion_summary_text()
     |> case do
-      nil -> nil
-      trimmed -> ["## Symphony 작업 요약", trimmed] |> Enum.join("\n\n")
+      nil ->
+        nil
+
+      trimmed ->
+        if(String.starts_with?(trimmed, "## Symphony 작업 요약"),
+          do: trimmed,
+          else: ["## Symphony 작업 요약", trimmed] |> Enum.join("\n\n")
+        )
     end
   end
 
@@ -845,7 +851,7 @@ defmodule SymphonyEx.Orchestrator do
     end
   end
 
-  @summary_candidate_events [:agent_message, :notification, :turn_completed]
+  @summary_candidate_events [:agent_message, :notification, :turn_completed, :item_completed]
 
   @spec event_summary_text(term()) :: String.t() | nil
   defp event_summary_text(%{event: event, message: message, params: params})
@@ -865,6 +871,8 @@ defmodule SymphonyEx.Orchestrator do
 
   defp normalize_summary_text(_), do: nil
 
+  @summary_block_pattern ~r/(## Symphony 작업 요약\s*(?:\n(?:- .+))+)/u
+
   @prompt_like_summary_markers [
     "you are an unattended coding agent",
     "## operating rules",
@@ -875,9 +883,20 @@ defmodule SymphonyEx.Orchestrator do
   defp candidate_summary_text(message) do
     message
     |> normalize_summary_text()
+    |> extract_summary_block()
     |> case do
       nil -> nil
       trimmed -> if(is_prompt_like_summary?(trimmed), do: nil, else: trimmed)
+    end
+  end
+
+  @spec extract_summary_block(String.t() | nil) :: String.t() | nil
+  defp extract_summary_block(nil), do: nil
+
+  defp extract_summary_block(text) do
+    case Regex.run(@summary_block_pattern, text, capture: :all_but_first) do
+      [summary_block] -> String.trim(summary_block)
+      _ -> text
     end
   end
 

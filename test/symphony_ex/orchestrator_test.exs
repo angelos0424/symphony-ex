@@ -383,6 +383,55 @@ defmodule SymphonyEx.OrchestratorTest do
            end)
   end
 
+  test "prefers an explicit Symphony summary block from the final message" do
+    issue = issue_fixture("SUMMARY-3A")
+
+    start_supervised!(
+      {Control,
+       test_pid: self(),
+       candidate_batches: [[issue], []],
+       run_results: [
+         %{
+           status: :success,
+           error: nil,
+           last_message:
+             "Completed inspection.\n\n## Symphony 작업 요약\n- what changed: inspected the target frontend path only\n- files touched: none\n- validation performed: confirmed the referenced file exists\n- blockers: none\n\nextra trailing text that should be ignored",
+           events: []
+         }
+       ]}
+    )
+
+    orchestrator =
+      start_supervised!(
+        {Orchestrator,
+         tracker: MockTracker,
+         workspace: MockWorkspace,
+         agent_runner: MockAgentRunner,
+         tracker_opts: [],
+         workspace_opts: [],
+         workflow_path: "/tmp/WORKFLOW.md",
+         codex: [],
+         poll_interval_ms: 25,
+         retry_backoff_ms: 10,
+         max_retry_backoff_ms: 10,
+         max_concurrent: 1,
+         task_supervisor: SymphonyEx.TestAgentWorkers}
+      )
+
+    wait_until(fn ->
+      snapshot = Orchestrator.snapshot(orchestrator)
+      map_size(snapshot.running) == 0 and length(snapshot.completed) == 1
+    end)
+
+    assert Enum.any?(Control.comments(), fn %{issue_identifier: identifier, body: body} ->
+             identifier == "SUMMARY-3A" and
+               body =~ "## Symphony 작업 요약" and
+               body =~ "- files touched: none" and
+               not String.contains?(body, "Completed inspection") and
+               not String.contains?(body, "extra trailing text")
+           end)
+  end
+
   test "prefers the latest summary-bearing event over earlier prompt-like payloads" do
     issue = issue_fixture("SUMMARY-3")
 
@@ -454,6 +503,66 @@ defmodule SymphonyEx.OrchestratorTest do
                body =~ "files touched" and
                not String.contains?(body, "You are an unattended coding agent") and
                not String.contains?(body, "## Operating Rules")
+           end)
+  end
+
+  test "extracts summary blocks from item_completed payloads" do
+    issue = issue_fixture("SUMMARY-3B")
+
+    start_supervised!(
+      {Control,
+       test_pid: self(),
+       candidate_batches: [[issue], []],
+       run_results: [
+         %{
+           status: :success,
+           error: nil,
+           last_message: nil,
+           events: [
+             %Events{
+               event: :item_completed,
+               timestamp: DateTime.utc_now() |> DateTime.to_iso8601(),
+               raw_method: "item.completed",
+               message: nil,
+               params: %{
+                 "data" => %{
+                   "output_text" =>
+                     "## Symphony 작업 요약\n- what changed: inspected the requested path\n- files touched: none\n- validation performed: confirmed frontend/src/App.tsx exists\n- blockers: none"
+                 }
+               }
+             }
+           ]
+         }
+       ]}
+    )
+
+    orchestrator =
+      start_supervised!(
+        {Orchestrator,
+         tracker: MockTracker,
+         workspace: MockWorkspace,
+         agent_runner: MockAgentRunner,
+         tracker_opts: [],
+         workspace_opts: [],
+         workflow_path: "/tmp/WORKFLOW.md",
+         codex: [],
+         poll_interval_ms: 25,
+         retry_backoff_ms: 10,
+         max_retry_backoff_ms: 10,
+         max_concurrent: 1,
+         task_supervisor: SymphonyEx.TestAgentWorkers}
+      )
+
+    wait_until(fn ->
+      snapshot = Orchestrator.snapshot(orchestrator)
+      map_size(snapshot.running) == 0 and length(snapshot.completed) == 1
+    end)
+
+    assert Enum.any?(Control.comments(), fn %{issue_identifier: identifier, body: body} ->
+             identifier == "SUMMARY-3B" and
+               body =~ "## Symphony 작업 요약" and
+               body =~ "- files touched: none" and
+               body =~ "confirmed frontend/src/App.tsx exists"
            end)
   end
 

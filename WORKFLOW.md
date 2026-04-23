@@ -7,7 +7,7 @@ tracker:
   terminal-states:
     - Done
   write-back:
-    enabled: false
+    enabled: true
 workspace:
   source_repo_url: $SOURCE_REPO_URL
 orchestrator:
@@ -71,10 +71,16 @@ Current state: <%= issue.state %>
 - `$gstack-review 기준으로 변경사항 검토하고 부족한 테스트 보강`
 
 ## Final Response Format
-Your final response should include only:
-- what changed
-- files touched
-- validation performed
-- blockers (if any)
+Return only a single summary block in exactly this format:
 
-Do not include chain-of-thought, broad future plans, or unrelated improvements.
+## Symphony 작업 요약
+- what changed: ...
+- files touched: ...
+- validation performed: ...
+- blockers: ...
+
+Rules:
+- Do not include any text before or after the `## Symphony 작업 요약` block.
+- Keep each line concise and outcome-focused.
+- If there are no blockers, write `- blockers: none`.
+- Do not include chain-of-thought, broad future plans, or unrelated improvements.
