@@ -301,6 +301,61 @@ defmodule SymphonyEx.WorkspaceTest do
     assert_received :added_target_branch
   end
 
+  test "prepare mirrors detected gstack skills into the worktree" do
+    root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-workspace-test-#{System.unique_integer([:positive])}"
+      )
+
+    source_repo_path = Path.join(root, "source")
+    gstack_root = Path.join(root, "gstack-root")
+
+    issue = %Issue{id: "1", identifier: "SYM-102", title: "Title", description: "", state: "Todo"}
+    path = Workspace.path_for_issue(root, issue)
+    skill_source = Path.join([gstack_root, "gstack-design-review", "SKILL.md"])
+    parent = self()
+    previous_gstack_root = System.get_env("GSTACK_ROOT")
+
+    File.mkdir_p!(source_repo_path)
+    File.mkdir_p!(Path.dirname(skill_source))
+    File.write!(skill_source, "# gstack skill\n")
+    System.put_env("GSTACK_ROOT", gstack_root)
+
+    on_exit(fn ->
+      if previous_gstack_root do
+        System.put_env("GSTACK_ROOT", previous_gstack_root)
+      else
+        System.delete_env("GSTACK_ROOT")
+      end
+    end)
+
+    shell = fn
+      "git", ["worktree", "prune"], [cd: ^source_repo_path] ->
+        {"", 0}
+
+      "git", ["worktree", "list", "--porcelain"], [cd: ^source_repo_path] ->
+        {"worktree #{source_repo_path}\n", 0}
+
+      "git", ["worktree", "add", "--detach", ^path, "HEAD"], [cd: ^source_repo_path] ->
+        File.mkdir_p!(path)
+        send(parent, :added)
+        {"", 0}
+    end
+
+    assert {:ok, %{path: ^path, reason: :fresh}} =
+             Workspace.prepare(issue,
+               root: root,
+               source_repo_path: source_repo_path,
+               shell_fun: shell
+             )
+
+    assert_received :added
+    mirrored_path = Path.join([path, ".agents", "skills", "gstack-design-review"])
+    assert File.exists?(mirrored_path)
+    assert File.read!(Path.join(mirrored_path, "SKILL.md")) == "# gstack skill\n"
+  end
+
   test "cleanup_inactive_worktrees removes closed issue worktrees" do
     root = Path.join(System.tmp_dir!(), "symphony-workspace-cleanup-#{System.unique_integer([:positive])}")
     source_repo_path = Path.join(root, "source")

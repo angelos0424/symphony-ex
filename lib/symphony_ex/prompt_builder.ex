@@ -9,18 +9,45 @@ defmodule SymphonyEx.PromptBuilder do
 
   @gstack_skill_token ~r/(^|[^\w-])\$(gstack-[a-z0-9-]+)\b/
 
+  @type external_reference ::
+          %{type: :skill, name: String.t(), path: String.t(), content: String.t()}
+          | %{type: :command, name: String.t(), path: String.t()}
+
+  @type build_payload :: %{
+          prompt: String.t(),
+          external_references: [external_reference()]
+        }
+
   @spec build(String.t(), Issue.t(), keyword()) :: {:ok, String.t()} | {:error, term()}
   def build(workflow_path, issue, opts \\ []) do
+    with {:ok, %{prompt: prompt}} <- build_payload(workflow_path, issue, opts) do
+      {:ok, prompt}
+    end
+  end
+
+  @spec build_payload(String.t(), Issue.t(), keyword()) ::
+          {:ok, build_payload()} | {:error, term()}
+  def build_payload(workflow_path, issue, opts \\ []) do
     template = load_template(workflow_path, Keyword.get(opts, :workflow_store, WorkflowStore))
 
     with {:ok, external_references} <- resolve_external_references(issue, opts) do
       {:ok,
-       build_from_template(
-         template,
-         issue,
-         Keyword.put(opts, :external_references, external_references)
-       )}
+       %{
+         prompt:
+           build_from_template(
+             template,
+             issue,
+             Keyword.put(opts, :external_references, external_references)
+           ),
+         external_references: external_references
+       }}
     end
+  end
+
+  @spec external_references(Issue.t(), keyword()) ::
+          {:ok, [external_reference()]} | {:error, term()}
+  def external_references(%Issue{} = issue, opts \\ []) do
+    resolve_external_references(issue, opts)
   end
 
   @spec build_from_template(String.t(), Issue.t(), keyword()) :: String.t()

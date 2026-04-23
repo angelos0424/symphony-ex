@@ -56,6 +56,20 @@ Current state: <%= issue.state %>
 4. Run targeted validation if practical.
 5. Keep the final response concise and outcome-focused.
 
+## GStack Skill Usage
+- If an issue body references `$gstack-...` (for example `$gstack-design-review`), SymphonyEx resolves that skill before starting the turn.
+- Referenced GStack skills are embedded into the prompt **and** sent to Codex app-server as native `skill` input items.
+- Workspace preparation also mirrors the detected GStack skill root into `<worktree>/.agents/skills` when available so Codex can discover the skills locally.
+- Skill root detection order:
+  1. `GSTACK_ROOT`
+  2. `~/.gstack/repos/gstack/.agents/skills`
+  3. `~/.codex/skills/gstack`
+- If a referenced GStack skill is missing, the run stops before startup with a clear blocker instead of guessing.
+
+### Example issue description snippets
+- `$gstack-design-review 실행 후 필요한 수정까지 반영`
+- `$gstack-review 기준으로 변경사항 검토하고 부족한 테스트 보강`
+
 ## Final Response Format
 Your final response should include only:
 - what changed

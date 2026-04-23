@@ -133,6 +133,7 @@ defmodule SymphonyEx.Workspace do
   defp create_fresh_worktree(path, root, source_repo_path, shell, hooks, issue, reason) do
     with :ok <- cleanup_stale_worktree_path(root, path, source_repo_path, shell),
          {_, 0} <- shell.("git", worktree_add_args(path, issue), cd: source_repo_path),
+         :ok <- ensure_gstack_skills_available(path),
          :ok <- run_hook(:after_create, hooks, path, shell, issue) do
       {:ok, %{path: path, reason: reason}}
     else
@@ -161,6 +162,67 @@ defmodule SymphonyEx.Workspace do
   end
 
   defp worktree_add_args(path, %Issue{}), do: ["worktree", "add", "--detach", path, "HEAD"]
+
+  @spec ensure_gstack_skills_available(String.t()) :: :ok | {:error, term()}
+  defp ensure_gstack_skills_available(worktree_path) do
+    if File.dir?(worktree_path) do
+      case detect_gstack_skill_root() do
+        nil ->
+          :ok
+
+        source_root ->
+          target_root = Path.join([worktree_path, ".agents", "skills"])
+
+          with :ok <- File.mkdir_p(target_root) do
+            source_root
+            |> File.ls!()
+            |> Enum.reduce_while(:ok, fn entry, :ok ->
+              source_path = Path.join(source_root, entry)
+              target_path = Path.join(target_root, entry)
+
+              cond do
+                not File.dir?(source_path) ->
+                  {:cont, :ok}
+
+                File.exists?(target_path) ->
+                  {:cont, :ok}
+
+                true ->
+                  case File.ln_s(source_path, target_path) do
+                    :ok ->
+                      {:cont, :ok}
+
+                    {:error, _reason} ->
+                      case File.cp_r(source_path, target_path) do
+                        {:ok, _paths} ->
+                          {:cont, :ok}
+
+                        {:error, reason, _path} ->
+                          {:halt, {:error, {:gstack_sync_failed, reason}}}
+                      end
+                  end
+              end
+            end)
+          end
+      end
+    else
+      :ok
+    end
+  end
+
+  @spec detect_gstack_skill_root() :: String.t() | nil
+  defp detect_gstack_skill_root do
+    home = System.user_home()
+
+    [
+      System.get_env("GSTACK_ROOT"),
+      Path.join([home, ".gstack", "repos", "gstack", ".agents", "skills"]),
+      Path.join([home, ".codex", "skills", "gstack"])
+    ]
+    |> Enum.filter(&is_binary/1)
+    |> Enum.map(&Path.expand/1)
+    |> Enum.find(&File.dir?/1)
+  end
 
   @spec preflight_session(String.t()) :: {:ok, prepare_reason()} | {:error, term()}
   defp preflight_session(path) do

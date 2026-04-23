@@ -74,13 +74,13 @@ defmodule SymphonyEx.AgentRunner do
             workspace_path: workspace_path
           })
 
-        case PromptBuilder.build(workflow_path, issue,
+        case PromptBuilder.build_payload(workflow_path, issue,
                comments: comments,
                context_docs: context_docs,
                workflow_store: Keyword.get(opts, :workflow_store, SymphonyEx.WorkflowStore),
                workspace_path: workspace_path
              ) do
-          {:ok, prompt} ->
+          {:ok, %{prompt: prompt, external_references: external_references}} ->
             {:ok, server} = app_server.start_link(command: command, cwd: workspace_path)
             app_server.subscribe(server)
 
@@ -89,6 +89,7 @@ defmodule SymphonyEx.AgentRunner do
                 app_server,
                 server,
                 prompt,
+                external_references,
                 issue,
                 workspace_path,
                 codex_config,
@@ -111,6 +112,7 @@ defmodule SymphonyEx.AgentRunner do
           module(),
           GenServer.server(),
           String.t(),
+          [PromptBuilder.external_reference()],
           Issue.t(),
           Path.t(),
           keyword(),
@@ -123,6 +125,7 @@ defmodule SymphonyEx.AgentRunner do
          app_server,
          server,
          prompt,
+         external_references,
          issue,
          workspace_path,
          codex_config,
@@ -151,7 +154,13 @@ defmodule SymphonyEx.AgentRunner do
          {:ok, _turn_result} <-
            app_server.start_turn(
              server,
-             turn_start_params(thread_id, prompt, workspace_path, codex_config)
+             turn_start_params(
+               thread_id,
+               prompt,
+               external_references,
+               workspace_path,
+               codex_config
+             )
            ) do
       Logger.metadata(
         Logging.logger_metadata(
@@ -847,10 +856,16 @@ defmodule SymphonyEx.AgentRunner do
     |> maybe_put("sandbox", app_server_thread_sandbox(Keyword.get(codex_config, :thread_sandbox)))
   end
 
-  @spec turn_start_params(String.t(), String.t(), String.t(), keyword()) :: map()
-  defp turn_start_params(thread_id, prompt, workspace_path, codex_config) do
+  @spec turn_start_params(
+          String.t(),
+          String.t(),
+          [PromptBuilder.external_reference()],
+          String.t(),
+          keyword()
+        ) :: map()
+  defp turn_start_params(thread_id, prompt, external_references, workspace_path, codex_config) do
     %{
-      "input" => [%{"type" => "text", "text" => prompt}],
+      "input" => [%{"type" => "text", "text" => prompt} | skill_input_items(external_references)],
       "threadId" => thread_id,
       "cwd" => workspace_path
     }
@@ -895,6 +910,24 @@ defmodule SymphonyEx.AgentRunner do
   @spec maybe_put(map(), String.t(), any()) :: map()
   defp maybe_put(params, _key, nil), do: params
   defp maybe_put(params, key, value), do: Map.put(params, key, value)
+
+  @spec skill_input_items([PromptBuilder.external_reference()]) :: [map()]
+  defp skill_input_items(external_references) do
+    external_references
+    |> Enum.flat_map(fn
+      %{type: :skill, name: name, path: path} ->
+        [
+          %{
+            "type" => "skill",
+            "name" => name,
+            "path" => path
+          }
+        ]
+
+      _other ->
+        []
+    end)
+  end
 
   @spec codex_cli_approval_policy(atom() | nil) :: String.t() | nil
   defp codex_cli_approval_policy(nil), do: nil

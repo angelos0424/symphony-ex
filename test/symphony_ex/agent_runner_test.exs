@@ -515,6 +515,51 @@ defmodule SymphonyEx.AgentRunnerTest do
     assert turn_params["sandboxPolicy"] == %{"type" => "dangerFullAccess"}
   end
 
+  test "adds native Codex skill input items for referenced gstack skills" do
+    workspace_path = tmp_workspace("gstack-skill-input")
+    workflow_path = write_workflow(workspace_path)
+    skill_root = Path.join(workspace_path, "gstack-root")
+    skill_path = Path.join([skill_root, "gstack-design-review", "SKILL.md"])
+    issue = %Issue{issue_fixture("SYM-306A") | description: "$gstack-design-review 실행"}
+
+    File.mkdir_p!(Path.dirname(skill_path))
+    File.write!(skill_path, "# gstack design review\n")
+
+    previous_gstack_root = System.get_env("GSTACK_ROOT")
+    System.put_env("GSTACK_ROOT", skill_root)
+    Application.put_env(:symphony_ex, :agent_runner_test_pid, self())
+
+    on_exit(fn ->
+      Application.delete_env(:symphony_ex, :agent_runner_test_pid)
+
+      if previous_gstack_root do
+        System.put_env("GSTACK_ROOT", previous_gstack_root)
+      else
+        System.delete_env("GSTACK_ROOT")
+      end
+    end)
+
+    result =
+      AgentRunner.run(issue,
+        workspace_path: workspace_path,
+        workflow_path: workflow_path,
+        codex: [command: "codex app-server"],
+        app_server: CapturingAppServer
+      )
+
+    assert result.status == :success
+
+    assert_receive {:app_server_turn_start, turn_params}
+
+    assert [
+             %{"type" => "text", "text" => prompt},
+             %{"type" => "skill", "name" => "gstack-design-review", "path" => ^skill_path}
+           ] =
+             turn_params["input"]
+
+    assert prompt =~ "$gstack-design-review"
+  end
+
   test "reclassifies blocked completion as failed" do
     workspace_path = tmp_workspace("blocked-result")
     workflow_path = write_workflow(workspace_path)
