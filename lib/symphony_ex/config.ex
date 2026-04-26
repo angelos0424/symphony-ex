@@ -150,7 +150,10 @@ defmodule SymphonyEx.Config do
   @spec resolve_tracker_env(atom() | nil, atom() | nil, keyword()) :: keyword()
   defp resolve_tracker_env(:github, _yaml_kind, github_env), do: github_env
   defp resolve_tracker_env(_explicit, :github, github_env) when github_env != [], do: github_env
-  defp resolve_tracker_env(_explicit, _yaml_kind, github_env) when github_env != [], do: github_env
+
+  defp resolve_tracker_env(_explicit, _yaml_kind, github_env) when github_env != [],
+    do: github_env
+
   defp resolve_tracker_env(_explicit, _yaml_kind, _github_env), do: []
 
   @spec github_tracker_env() :: keyword()

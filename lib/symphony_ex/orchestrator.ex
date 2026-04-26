@@ -474,10 +474,14 @@ defmodule SymphonyEx.Orchestrator do
   end
 
   defp hydrate_candidate_issue(state, %Issue{} = issue) do
-    case state.tracker.fetch_issue_by_identifier(issue.identifier, state.tracker_opts) do
-      {:ok, %Issue{} = hydrated_issue} -> {:ok, hydrated_issue}
-      {:ok, nil} -> {:skip, :issue_not_found}
-      {:error, _reason} -> {:skip, :issue_fetch_failed}
+    if review_task_issue?(issue) do
+      {:ok, issue}
+    else
+      case state.tracker.fetch_issue_by_identifier(issue.identifier, state.tracker_opts) do
+        {:ok, %Issue{} = hydrated_issue} -> {:ok, hydrated_issue}
+        {:ok, nil} -> {:skip, :issue_not_found}
+        {:error, _reason} -> {:skip, :issue_fetch_failed}
+      end
     end
   end
 
@@ -596,7 +600,18 @@ defmodule SymphonyEx.Orchestrator do
           )
         )
 
-        queue_retry_or_release(state, issue, attempt, {:error, reason})
+        queue_retry_or_release(
+          state,
+          issue,
+          attempt,
+          %{
+            status: :failed,
+            error: inspect(reason),
+            error_category: "workspace_prepare_failed",
+            events: []
+          },
+          %{workspace_path: nil, started_at: nil, started_at_ms: nil}
+        )
     end
   end
 
@@ -646,17 +661,18 @@ defmodule SymphonyEx.Orchestrator do
     |> clear_issue_retry_state(issue, attempt, completion_metadata(result, running_entry))
   end
 
-  defp maybe_retry_or_release(state, issue, attempt, result, _running_entry) do
-    queue_retry_or_release(state, issue, attempt, result)
+  defp maybe_retry_or_release(state, issue, attempt, result, running_entry) do
+    queue_retry_or_release(state, issue, attempt, result, running_entry)
   end
 
-  @spec queue_retry_or_release(state(), Issue.t(), non_neg_integer(), term()) :: state()
-  defp queue_retry_or_release(state, issue, attempt, result) do
+  @spec queue_retry_or_release(state(), Issue.t(), non_neg_integer(), term(), running_entry()) ::
+          state()
+  defp queue_retry_or_release(state, issue, attempt, result, running_entry) do
     next_retry_count = attempt + 1
     concurrency_class = classify_issue(issue)
     conflict_keys = issue_conflict_keys(issue, state)
 
-    if next_retry_count <= state.max_retries do
+    if retryable_result?(result) and next_retry_count <= state.max_retries do
       backoff_ms = compute_backoff_ms(state, next_retry_count)
       queued_at = DateTime.utc_now()
       queued_at_ms = System.system_time(:millisecond)
@@ -684,17 +700,31 @@ defmodule SymphonyEx.Orchestrator do
       })
       |> put_in([:retries, issue.identifier], next_retry_count)
     else
+      metadata = completion_metadata(result, running_entry)
+
       state
+      |> maybe_post_completion_summary(issue, metadata)
       |> persist_run_state(issue, :released, attempt, %{
         result: :failed,
         details: inspect(result)
       })
-      |> clear_issue_retry_state(issue, attempt)
+      |> clear_issue_retry_state(issue, attempt, metadata)
     end
   end
 
+  @non_retryable_error_categories MapSet.new([
+                                    "missing_skill_reference"
+                                  ])
+
+  @spec retryable_result?(term()) :: boolean()
+  defp retryable_result?(%{error_category: category}) when is_binary(category) do
+    not MapSet.member?(@non_retryable_error_categories, category)
+  end
+
+  defp retryable_result?(_result), do: true
+
   @spec clear_issue_retry_state(state(), Issue.t(), non_neg_integer(), map()) :: state()
-  defp clear_issue_retry_state(state, issue, attempt, metadata \\ %{}) do
+  defp clear_issue_retry_state(state, issue, attempt, metadata) do
     identifier = issue.identifier
 
     state
@@ -821,11 +851,9 @@ defmodule SymphonyEx.Orchestrator do
 
   @spec completion_summary_comment_body(map()) :: String.t() | nil
   defp completion_summary_comment_body(metadata) do
-    metadata
-    |> completion_summary_text()
-    |> case do
+    case completion_summary_text(metadata) do
       nil ->
-        nil
+        failure_summary_comment_body(metadata)
 
       trimmed ->
         if(String.starts_with?(trimmed, "## Symphony 작업 요약"),
@@ -834,6 +862,31 @@ defmodule SymphonyEx.Orchestrator do
         )
     end
   end
+
+  @spec failure_summary_comment_body(map()) :: String.t() | nil
+  defp failure_summary_comment_body(%{result: result} = metadata)
+       when result in [:failed, :error] do
+    error = metadata[:error] || "unknown failure"
+    category = metadata[:error_category] || "unknown"
+
+    [
+      "## Symphony 작업 요약",
+      "- status: failed",
+      "- what changed: 작업이 완료되지 않아 변경사항을 확정하지 못했습니다.",
+      "- files touched: none confirmed by Symphony",
+      "- validation performed: not completed",
+      "- failure category: #{category}",
+      "- failure detail: #{format_failure_detail(error)}",
+      "- next step: 원인 조치 후 이슈를 다시 Todo/In Progress로 이동하거나 새 `@Task`로 재시도하세요."
+    ]
+    |> Enum.join("\n")
+  end
+
+  defp failure_summary_comment_body(_metadata), do: nil
+
+  @spec format_failure_detail(term()) :: String.t()
+  defp format_failure_detail(error) when is_binary(error), do: String.replace(error, "\n", " ")
+  defp format_failure_detail(error), do: error |> inspect() |> String.replace("\n", " ")
 
   @spec completion_summary_text(map()) :: String.t() | nil
   defp completion_summary_text(metadata) do
@@ -879,14 +932,24 @@ defmodule SymphonyEx.Orchestrator do
     "## final response format"
   ]
 
+  @ignored_summary_markers [
+    "warning: exceeded skills context budget"
+  ]
+
   @spec candidate_summary_text(term()) :: String.t() | nil
   defp candidate_summary_text(message) do
     message
     |> normalize_summary_text()
     |> extract_summary_block()
     |> case do
-      nil -> nil
-      trimmed -> if(is_prompt_like_summary?(trimmed), do: nil, else: trimmed)
+      nil ->
+        nil
+
+      trimmed ->
+        if(ignored_summary_text?(trimmed) or is_prompt_like_summary?(trimmed),
+          do: nil,
+          else: trimmed
+        )
     end
   end
 
@@ -905,6 +968,13 @@ defmodule SymphonyEx.Orchestrator do
     normalized = String.downcase(text)
 
     Enum.any?(@prompt_like_summary_markers, &String.contains?(normalized, &1))
+  end
+
+  @spec ignored_summary_text?(String.t()) :: boolean()
+  defp ignored_summary_text?(text) do
+    normalized = String.downcase(text)
+
+    Enum.any?(@ignored_summary_markers, &String.contains?(normalized, &1))
   end
 
   @summary_text_keys [
@@ -1040,7 +1110,8 @@ defmodule SymphonyEx.Orchestrator do
   @spec check_issue_not_duplicate(state(), Issue.t()) :: :ok | {:skip, atom()}
   defp check_issue_not_duplicate(state, issue) do
     cond do
-      MapSet.member?(state.completed_issue_identifiers, issue.identifier) ->
+      MapSet.member?(state.completed_issue_identifiers, issue.identifier) and
+          not review_task_issue?(issue) ->
         {:skip, :already_completed}
 
       Map.has_key?(state.running, issue.identifier) ->
@@ -1067,6 +1138,11 @@ defmodule SymphonyEx.Orchestrator do
 
   @spec dependency_blocked?(Issue.t()) :: boolean()
   defp dependency_blocked?(%Issue{} = issue), do: issue.blocked_by_identifiers != []
+
+  @spec review_task_issue?(Issue.t()) :: boolean()
+  defp review_task_issue?(%Issue{} = issue) do
+    "symphony:review-task" in issue.labels or issue.review_task_ids != []
+  end
 
   @spec missing_required_metadata?(Issue.t()) :: boolean()
   defp missing_required_metadata?(%Issue{} = issue), do: issue.missing_required_fields != []

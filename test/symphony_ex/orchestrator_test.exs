@@ -383,6 +383,69 @@ defmodule SymphonyEx.OrchestratorTest do
            end)
   end
 
+  test "ignores warning messages when extracting completion summary" do
+    issue = issue_fixture("SUMMARY-WARN")
+
+    start_supervised!(
+      {Control,
+       test_pid: self(),
+       candidate_batches: [[issue], []],
+       run_results: [
+         %{
+           status: :success,
+           error: nil,
+           last_message:
+             "Warning: Exceeded skills context budget of 2%. Loaded skill descriptions were truncated.",
+           events: [
+             %Events{
+               event: :item_completed,
+               timestamp: DateTime.utc_now() |> DateTime.to_iso8601(),
+               raw_method: "item/completed",
+               message: nil,
+               params: %{
+                 "item" => %{
+                   "content" => [
+                     %{
+                       "text" =>
+                         "## Symphony 작업 요약\n- what changed: completed engineering review\n- files touched: .review/eng.md\n- validation performed: npm test\n- blockers: none"
+                     }
+                   ]
+                 }
+               }
+             }
+           ]
+         }
+       ]}
+    )
+
+    orchestrator =
+      start_supervised!(
+        {Orchestrator,
+         tracker: MockTracker,
+         workspace: MockWorkspace,
+         agent_runner: MockAgentRunner,
+         tracker_opts: [],
+         workspace_opts: [],
+         workflow_path: "/tmp/WORKFLOW.md",
+         codex: [],
+         poll_interval_ms: 25,
+         retry_backoff_ms: 10,
+         max_retry_backoff_ms: 10,
+         max_concurrent: 1,
+         task_supervisor: SymphonyEx.TestAgentWorkers}
+      )
+
+    wait_until(fn ->
+      snapshot = Orchestrator.snapshot(orchestrator)
+      map_size(snapshot.running) == 0 and length(snapshot.completed) == 1
+    end)
+
+    assert Enum.any?(Control.comments(), fn %{issue_identifier: identifier, body: body} ->
+             identifier == "SUMMARY-WARN" and body =~ "completed engineering review" and
+               not String.contains?(body, "Exceeded skills context budget")
+           end)
+  end
+
   test "prefers an explicit Symphony summary block from the final message" do
     issue = issue_fixture("SUMMARY-3A")
 
@@ -623,6 +686,46 @@ defmodule SymphonyEx.OrchestratorTest do
 
     refute Enum.any?(Control.comments(), fn %{issue_identifier: identifier, body: body} ->
              identifier == "SUMMARY-4" and body =~ "## Symphony 작업 요약"
+           end)
+  end
+
+  test "posts failure summary and avoids retrying deterministic missing skill failures" do
+    issue = issue_fixture("FAIL-SKILL-1")
+
+    start_supervised!(
+      {Control,
+       test_pid: self(),
+       candidate_batches: [[issue], []],
+       run_results: [
+         %{
+           status: :failed,
+           events: [],
+           error: "Referenced skill $gstack-ceo-review is not installed",
+           error_category: "missing_skill_reference"
+         }
+       ]}
+    )
+
+    orchestrator = start_orchestrator(max_retries: 3)
+
+    wait_until(fn ->
+      snapshot = Orchestrator.snapshot(orchestrator)
+
+      map_size(snapshot.running) == 0 and length(Control.runs()) == 1 and
+        Enum.any?(Control.updates(), fn %{issue: updated_issue, payload: payload} ->
+          updated_issue.identifier == "FAIL-SKILL-1" and payload[:status] == :released and
+            payload[:result] == :failed
+        end)
+    end)
+
+    assert Enum.any?(Control.comments(), fn %{issue_identifier: identifier, body: body} ->
+             identifier == "FAIL-SKILL-1" and body =~ "## Symphony 작업 요약" and
+               body =~ "status: failed" and
+               body =~ "failure category: missing_skill_reference"
+           end)
+
+    refute Enum.any?(Control.updates(), fn %{issue: updated_issue, payload: payload} ->
+             updated_issue.identifier == "FAIL-SKILL-1" and payload[:status] == :retry_queued
            end)
   end
 

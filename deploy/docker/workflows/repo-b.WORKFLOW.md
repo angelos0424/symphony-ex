@@ -1,6 +1,9 @@
 ---
 tracker:
   kind: github
+  owner: angelos0424
+  repo: church_platform
+  project-number: 4
   active-states:
     - Todo
     - In Progress
@@ -10,12 +13,13 @@ tracker:
   write-back:
     enabled: true
 workspace:
-  source_repo_url: $SOURCE_REPO_URL
+  root: /srv/symphony/repo-b/worktrees
+  source-cache-root: /srv/symphony/repo-b/source-cache
 orchestrator:
+  poll-interval-ms: 60000
   max-concurrent: 1
-  max-retries: 3
+  max-retries: 0
   backoff-base-ms: 10000
-  poll-interval-ms: 30000
 codex:
   command: codex app-server
   thread-sandbox: dangerFullAccess
@@ -23,8 +27,10 @@ codex:
   turn-timeout-ms: 3600000
   stall-timeout-ms: 900000
 logging:
-  format: pretty
+  format: json
   level: info
+dashboard:
+  enabled: false
 ---
 You are an unattended coding agent working on GitHub issue <%= issue.identifier %>: "<%= issue.title %>".
 
@@ -57,7 +63,12 @@ Current state: <%= issue.state %>
 2. Read the relevant code and docs in the repository.
 3. Make the requested change.
 4. Run targeted validation if practical.
-5. Keep the final response concise and outcome-focused.
+5. Update project planning docs when the task changes the actual execution state:
+   - Update `TODOS.md` after every completed task or PR-scope change so it remains the source of truth for next actionable work.
+   - Mark completed checklist items, add newly discovered follow-up items, and adjust dependencies/status notes when relevant.
+   - Update `ROADMAP.md` only when the completed work changes product direction, current baseline, phase focus, major risks, or high-level sequencing.
+   - Do not duplicate detailed task checklists in `ROADMAP.md`; keep execution-level checklists in `TODOS.md` and high-level context in `ROADMAP.md`.
+6. Keep the final response concise and outcome-focused.
 
 ## GStack Skill Usage
 - If an issue body references `$gstack-...` (for example `$gstack-design-review`), SymphonyEx resolves that skill before starting the turn.

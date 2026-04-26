@@ -8,6 +8,7 @@ defmodule SymphonyEx.PromptBuilder do
   alias SymphonyEx.WorkflowStore
 
   @gstack_skill_token ~r/(^|[^\w-])\$(gstack-[a-z0-9-]+)\b/
+  @status_block_regex ~r/\n*<!-- symphony:status -->.*?<!-- \/symphony:status -->\n*/s
 
   @type external_reference ::
           %{type: :skill, name: String.t(), path: String.t(), content: String.t()}
@@ -55,6 +56,8 @@ defmodule SymphonyEx.PromptBuilder do
     comments = Keyword.get(opts, :comments, [])
     context_docs = Keyword.get(opts, :context_docs, "")
     external_references = Keyword.get(opts, :external_references, [])
+
+    issue = sanitize_issue_for_prompt(issue)
 
     bindings = [
       issue: issue,
@@ -123,6 +126,20 @@ defmodule SymphonyEx.PromptBuilder do
     |> Regex.scan(description)
     |> Enum.map(fn [_full, _prefix, name] -> name end)
     |> Enum.uniq()
+  end
+
+  @spec sanitize_issue_for_prompt(Issue.t()) :: Issue.t()
+  defp sanitize_issue_for_prompt(%Issue{} = issue) do
+    %{issue | description: strip_status_blocks(issue.description)}
+  end
+
+  @spec strip_status_blocks(String.t() | nil) :: String.t()
+  defp strip_status_blocks(nil), do: ""
+
+  defp strip_status_blocks(description) do
+    description
+    |> String.replace(@status_block_regex, "\n")
+    |> String.trim()
   end
 
   @spec resolve_external_reference(String.t(), keyword()) :: {:ok, map()} | {:error, term()}

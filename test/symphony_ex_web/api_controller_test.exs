@@ -26,7 +26,11 @@ defmodule SymphonyExWeb.ApiControllerTest do
   setup do
     Observability.reset()
     Observability.record_rate_limit(:github, %{remaining: 128, limit: 5000, reset: "1775174400"})
-    Observability.record_write_back_stage("SYM-1", :github, :essential, :success, %{status: :running})
+
+    Observability.record_write_back_stage("SYM-1", :github, :essential, :success, %{
+      status: :running
+    })
+
     Observability.record_write_back_stage("SYM-0", :github, :optional, :partial, %{
       failed_stage: :label_sync_failed,
       reason: "labels_down"
@@ -168,7 +172,11 @@ defmodule SymphonyExWeb.ApiControllerTest do
     assert body["completed"] |> hd() |> get_in(["thread_id"]) == "thread-0"
     assert body["completed"] |> hd() |> get_in(["log_excerpt", "event_count"]) == 2
     assert body["completed_issue_identifiers"] == ["SYM-0"]
-    assert Enum.map(body["write_back_stages"]["recent"], & &1["stage"]) == ["optional", "essential"]
+
+    assert Enum.map(body["write_back_stages"]["recent"], & &1["stage"]) == [
+             "optional",
+             "essential"
+           ]
   end
 
   test "GET /api/v1/runs/:identifier returns detailed running, retry, or completed entries" do

@@ -19,7 +19,9 @@ defmodule SymphonyEx.GitHubIssueFlowTest do
                 "Service: api\nPaths: lib/symphony_ex/orchestrator.ex"
               ),
             blocked_by: Keyword.get(opts, :blocked_by, []),
+            inbound_issue_comments: Keyword.get(opts, :inbound_issue_comments, []),
             run_calls: [],
+            run_descriptions: [],
             issue_state_updates: [],
             issue_bodies: [],
             issue_comments: []
@@ -36,9 +38,13 @@ defmodule SymphonyEx.GitHubIssueFlowTest do
       end)
     end
 
-    def record_run(identifier) do
+    def record_run(issue) do
       Agent.update(__MODULE__, fn state ->
-        %{state | run_calls: [identifier | state.run_calls]}
+        %{
+          state
+          | run_calls: [issue.identifier | state.run_calls],
+            run_descriptions: [issue.description | state.run_descriptions]
+        }
       end)
     end
 
@@ -47,6 +53,7 @@ defmodule SymphonyEx.GitHubIssueFlowTest do
         %{
           project_status: state.project_status,
           run_calls: Enum.reverse(state.run_calls),
+          run_descriptions: Enum.reverse(state.run_descriptions),
           issue_state_updates: Enum.reverse(state.issue_state_updates),
           issue_bodies: Enum.reverse(state.issue_bodies),
           issue_comments: Enum.reverse(state.issue_comments)
@@ -60,6 +67,14 @@ defmodule SymphonyEx.GitHubIssueFlowTest do
 
     def set_blocked_by(blocked_by) do
       Agent.update(__MODULE__, &Map.put(&1, :blocked_by, blocked_by))
+    end
+
+    def set_project_status(status) do
+      Agent.update(__MODULE__, &Map.put(&1, :project_status, status))
+    end
+
+    def set_inbound_issue_comments(comments) do
+      Agent.update(__MODULE__, &Map.put(&1, :inbound_issue_comments, comments))
     end
 
     defp handle_request(request, state) do
@@ -111,6 +126,18 @@ defmodule SymphonyEx.GitHubIssueFlowTest do
 
           {{:ok, %Req.Response{status: 200, body: response}},
            %{state | issue_bodies: [body | state.issue_bodies]}}
+
+        request.method == :get and
+            String.ends_with?(to_string(request.url), "/repos/example/repo/issues/12/comments") ->
+          {{:ok, %Req.Response{status: 200, body: state.inbound_issue_comments}}, state}
+
+        request.method == :get and
+            String.ends_with?(to_string(request.url), "/repos/example/repo/issues/3/comments") ->
+          {{:ok, %Req.Response{status: 200, body: []}}, state}
+
+        request.method == :get and
+            String.ends_with?(to_string(request.url), "/repos/example/repo/pulls/3/comments") ->
+          {{:ok, %Req.Response{status: 200, body: []}}, state}
 
         request.method == :post and
             String.ends_with?(to_string(request.url), "/repos/example/repo/issues/12/comments") ->
@@ -203,7 +230,7 @@ defmodule SymphonyEx.GitHubIssueFlowTest do
 
   defmodule MockAgentRunner do
     def run(issue, _opts) do
-      Control.record_run(issue.identifier)
+      Control.record_run(issue)
       %{status: :success, events: [], error: nil}
     end
   end
@@ -265,6 +292,94 @@ defmodule SymphonyEx.GitHubIssueFlowTest do
     assert Enum.any?(control.issue_bodies, &String.contains?(&1, "## Symphony Status"))
     assert Enum.any?(control.issue_bodies, &String.contains?(&1, "- Final status: in_review"))
     assert Enum.any?(control.issue_bodies, &String.contains?(&1, "- Pull request: none"))
+  end
+
+  test "processes @Task review feedback while issue remains In Review after a completed run" do
+    orchestrator =
+      start_supervised!(
+        {Orchestrator,
+         tracker: SymphonyEx.GitHub.Adapter,
+         workspace: MockWorkspace,
+         agent_runner: MockAgentRunner,
+         tracker_opts: [
+           api_key: "gh-token",
+           owner: "example",
+           repo: "repo",
+           project_number: 7,
+           active_states: ["Todo", "In Progress"],
+           review_task_states: ["In Review"],
+           terminal_states: ["Done"],
+           write_back: [in_progress_state_names: ["In Progress"]],
+           request_fun: &Control.request/1
+         ],
+         workspace_opts: [],
+         workflow_path: "/tmp/WORKFLOW.md",
+         codex: [],
+         poll_interval_ms: 25,
+         retry_backoff_ms: 10,
+         max_retry_backoff_ms: 10,
+         max_retries: 1,
+         max_concurrent: 1,
+         task_supervisor: SymphonyEx.IntegrationAgentWorkers}
+      )
+
+    wait_until(fn ->
+      snapshot = Orchestrator.snapshot(orchestrator)
+
+      Control.snapshot().run_calls == ["12"] and length(snapshot.completed) == 1 and
+        map_size(snapshot.running) == 0
+    end)
+
+    Control.set_issue_body(
+      "Service: docs\nPaths: .review/2026-04-24.md\nTarget-PR: 3\nTarget-Branch: codex/review-doc\n"
+    )
+
+    Control.set_project_status("In Review")
+
+    Control.set_inbound_issue_comments([
+      %{
+        "id" => 1001,
+        "user" => %{"login" => "reviewer"},
+        "body" => "@Task\n리뷰 문서의 실행 방법을 보완해줘.",
+        "html_url" => "https://github.com/example/repo/issues/12#issuecomment-1001"
+      },
+      %{
+        "id" => 1002,
+        "user" => %{"login" => "reviewer"},
+        "body" => "@Task review comment",
+        "html_url" => "https://github.com/example/repo/issues/12#issuecomment-1002"
+      },
+      %{
+        "id" => 1003,
+        "user" => %{"login" => "reviewer"},
+        "body" => "@Task review",
+        "html_url" => "https://github.com/example/repo/issues/12#issuecomment-1003"
+      }
+    ])
+
+    send(orchestrator, :tick)
+
+    wait_until(fn -> Control.snapshot().run_calls == ["12", "12"] end, 100)
+
+    control = Control.snapshot()
+    assert control.project_status == "In Review"
+    assert control.run_calls == ["12", "12"]
+    assert List.last(control.run_descriptions) =~ "## Review Follow-up Task"
+    assert List.last(control.run_descriptions) =~ "리뷰 문서의 실행 방법을 보완해줘."
+
+    assert List.last(control.run_descriptions) =~
+             "`@Task review comment`: inspect the review comments"
+
+    assert List.last(control.run_descriptions) =~
+             "`@Task review`: review the current target PR diff"
+
+    assert List.last(control.run_descriptions) =~ "$gstack-designer-review"
+    assert List.last(control.run_descriptions) =~ "$gstack-eng-review"
+
+    assert Enum.any?(
+             control.issue_bodies,
+             &String.contains?(&1, "processed_task: issue-comment:1001")
+           )
   end
 
   test "skips ambiguous issues with a visible missing metadata reason" do

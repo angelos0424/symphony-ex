@@ -146,7 +146,10 @@ defmodule SymphonyEx.Observability do
     }
   end
 
-  @spec snapshot_from_state(state()) :: %{rate_limits: map(), write_back_stages: write_back_stage_snapshot()}
+  @spec snapshot_from_state(state()) :: %{
+          rate_limits: map(),
+          write_back_stages: write_back_stage_snapshot()
+        }
   defp snapshot_from_state(state) do
     recent = get_in(state, [:write_back_stages, :recent]) || []
 

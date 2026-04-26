@@ -270,6 +270,91 @@ defmodule SymphonyEx.AgentRunnerTest do
     def get_events(server), do: Agent.get(server, & &1.events)
   end
 
+  defmodule PromptContainsBlockedExampleAppServer do
+    use Agent
+
+    alias SymphonyEx.Domain.Events
+
+    def start_link(_opts), do: Agent.start_link(fn -> %{events: [], subscriber: nil} end)
+
+    def subscribe(server, pid \\ self()) do
+      Agent.update(server, &Map.put(&1, :subscriber, pid))
+      :ok
+    end
+
+    def initialize(_server), do: {:ok, %{}}
+    def capabilities(_server), do: %{}
+
+    def start_thread(_server, _params),
+      do: {:ok, %{"threadId" => "thread-prompt-blocked-example"}}
+
+    def alive?(_server), do: true
+    def cancel_turn(_server), do: :ok
+    def shutdown(server), do: Agent.stop(server, :normal, 1_000)
+
+    def start_turn(server, _params) do
+      event = %Events{
+        event: :turn_completed,
+        timestamp: DateTime.utc_now() |> DateTime.to_iso8601(),
+        raw_method: "turn.completed",
+        message: "done",
+        params: %{
+          "turnId" => "turn-prompt-blocked-example",
+          "item" => %{
+            "content" => [
+              %{
+                "text" =>
+                  "Embedded skill template example:\nSTATUS: BLOCKED | NEEDS_CONTEXT\nREASON: example only"
+              }
+            ]
+          }
+        }
+      }
+
+      Agent.update(server, fn state -> %{state | events: [event]} end)
+
+      if subscriber = Agent.get(server, & &1.subscriber) do
+        send(subscriber, {:app_server_event, event})
+      end
+
+      {:ok, %{"turnId" => "turn-prompt-blocked-example"}}
+    end
+
+    def get_events(server), do: Agent.get(server, & &1.events)
+  end
+
+  defmodule StreamDisconnectedAppServer do
+    use Agent
+
+    def start_link(_opts), do: Agent.start_link(fn -> %{events: []} end)
+    def subscribe(_server, _pid \\ self()), do: :ok
+    def initialize(_server), do: {:ok, %{"supportsThreadReuse" => true, "supportsEvents" => true}}
+    def capabilities(_server), do: %{supports_thread_reuse: true, supports_events: true}
+    def start_thread(_server, _params), do: {:ok, %{"threadId" => "thread-stream-disconnected"}}
+    def alive?(_server), do: true
+    def cancel_turn(_server), do: :ok
+    def shutdown(server), do: Agent.stop(server, :normal, 1_000)
+
+    def start_turn(server, _params) do
+      message =
+        "stream disconnected before completion: The model `gpt-5.5` does not exist or you do not have access to it."
+
+      event = %Events{
+        event: :turn_completed,
+        timestamp: DateTime.utc_now() |> DateTime.to_iso8601(),
+        raw_method: "turn.completed",
+        message: message,
+        params: %{"turnId" => "turn-stream-disconnected"}
+      }
+
+      Agent.update(server, fn _state -> %{events: [event]} end)
+      send(self(), {:app_server_event, event})
+      {:ok, %{"turnId" => "turn-stream-disconnected"}}
+    end
+
+    def get_events(server), do: Agent.get(server, & &1.events)
+  end
+
   defmodule LastMessageAppServer do
     use Agent
 
@@ -580,6 +665,46 @@ defmodule SymphonyEx.AgentRunnerTest do
     {:ok, session} = SessionStore.load(workspace_path)
     assert session.phase == :failed
     assert session.error_category == "blocked"
+  end
+
+  test "does not reclassify embedded prompt blocked examples as failed" do
+    workspace_path = tmp_workspace("prompt-blocked-example")
+    workflow_path = write_workflow(workspace_path)
+    issue = issue_fixture("SYM-309C")
+
+    result =
+      AgentRunner.run(issue,
+        workspace_path: workspace_path,
+        workflow_path: workflow_path,
+        codex: [command: "codex app-server"],
+        app_server: PromptContainsBlockedExampleAppServer
+      )
+
+    assert result.status == :success
+    assert result.error_category == nil
+    assert result.last_message == "done"
+  end
+
+  test "reclassifies stream-disconnected completion as failed" do
+    workspace_path = tmp_workspace("stream-disconnected-result")
+    workflow_path = write_workflow(workspace_path)
+    issue = issue_fixture("SYM-309B")
+
+    result =
+      AgentRunner.run(issue,
+        workspace_path: workspace_path,
+        workflow_path: workflow_path,
+        codex: [command: "codex app-server"],
+        app_server: StreamDisconnectedAppServer
+      )
+
+    assert result.status == :failed
+    assert result.error_category == "stream_disconnected"
+    assert result.error =~ "stream disconnected before completion"
+
+    {:ok, session} = SessionStore.load(workspace_path)
+    assert session.phase == :failed
+    assert session.error_category == "stream_disconnected"
   end
 
   test "captures the latest event message as last_message" do

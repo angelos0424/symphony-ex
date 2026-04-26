@@ -552,40 +552,54 @@ defmodule SymphonyEx.AgentRunner do
 
   @spec validate_success_result(run_result(), [Events.t()], Issue.t()) :: run_result()
   defp validate_success_result(%{status: :success} = result, events, issue) do
-    case blocked_result_message(result, events) do
-      {:blocked, message} ->
+    case transient_failure_message(result, events) do
+      {:failed, message, category} ->
         %{
           result
           | status: :failed,
             error: message,
-            error_category: "blocked",
+            error_category: category,
             last_message: result.last_message || message
         }
 
       nil ->
-        with :ok <- verify_required_outputs(issue),
-             thread_log_path when is_binary(thread_log_path) <- extract_thread_log_path(events),
-             turn_id when is_binary(turn_id) <- result.turn_id,
-             {:error, message, category} <- detect_fatal_tool_failure(thread_log_path, turn_id) do
-          %{
-            result
-            | status: :failed,
-              error: message,
-              error_category: category,
-              last_message: result.last_message || message
-          }
-        else
-          {:error, message, category} ->
+        case blocked_result_message(result, events) do
+          {:blocked, message} ->
             %{
               result
               | status: :failed,
                 error: message,
-                error_category: category,
+                error_category: "blocked",
                 last_message: result.last_message || message
             }
 
-          _ ->
-            result
+          nil ->
+            with :ok <- verify_required_outputs(issue),
+                 thread_log_path when is_binary(thread_log_path) <-
+                   extract_thread_log_path(events),
+                 turn_id when is_binary(turn_id) <- result.turn_id,
+                 {:error, message, category} <-
+                   detect_fatal_tool_failure(thread_log_path, turn_id) do
+              %{
+                result
+                | status: :failed,
+                  error: message,
+                  error_category: category,
+                  last_message: result.last_message || message
+              }
+            else
+              {:error, message, category} ->
+                %{
+                  result
+                  | status: :failed,
+                    error: message,
+                    error_category: category,
+                    last_message: result.last_message || message
+                }
+
+              _ ->
+                result
+            end
         end
     end
   end
@@ -744,28 +758,20 @@ defmodule SymphonyEx.AgentRunner do
     head_ref = get_in(pr, ["head", "ref"]) || pr["headRefName"] || ""
     issue_number = to_string(issue.identifier)
 
-    explicit_target_match? =
-      cond do
-        is_integer(issue.target_pr) and is_binary(issue.target_branch) ->
-          pr_number == issue.target_pr and head_ref == issue.target_branch
+    cond do
+      is_integer(issue.target_pr) and is_binary(issue.target_branch) ->
+        pr_number == issue.target_pr and head_ref == issue.target_branch
 
-        is_integer(issue.target_pr) ->
-          pr_number == issue.target_pr
+      is_integer(issue.target_pr) ->
+        pr_number == issue.target_pr
 
-        is_binary(issue.target_branch) and String.trim(issue.target_branch) != "" ->
-          head_ref == issue.target_branch
+      is_binary(issue.target_branch) and String.trim(issue.target_branch) != "" and
+          head_ref == issue.target_branch ->
+        true
 
-        true ->
-          nil
-      end
-
-    case explicit_target_match? do
-      nil ->
+      true ->
         String.contains?(body, "##{issue_number}") or
           String.contains?(head_ref, "issue-#{issue_number}")
-
-      value ->
-        value
     end
   end
 
@@ -785,6 +791,21 @@ defmodule SymphonyEx.AgentRunner do
     |> String.trim()
   end
 
+  @spec transient_failure_message(run_result(), [Events.t()]) ::
+          {:failed, String.t(), String.t()} | nil
+  defp transient_failure_message(result, events) do
+    messages =
+      [result.error, result.last_message]
+      |> Kernel.++(Enum.flat_map(events, &event_messages/1))
+      |> Enum.filter(&(is_binary(&1) and String.trim(&1) != ""))
+
+    Enum.find_value(messages, fn message ->
+      if String.match?(message, ~r/stream disconnected before completion/i) do
+        {:failed, String.slice(message, 0, 500), "stream_disconnected"}
+      end
+    end)
+  end
+
   @spec blocked_result_message(run_result(), [Events.t()]) :: {:blocked, String.t()} | nil
   defp blocked_result_message(result, events) do
     messages =
@@ -800,24 +821,13 @@ defmodule SymphonyEx.AgentRunner do
   end
 
   @spec event_messages(Events.t()) :: [String.t()]
-  defp event_messages(%Events{message: message, params: params}) do
-    [message | nested_event_messages(params)]
+  defp event_messages(%Events{message: message}) do
+    # Blocked/transient detection must inspect agent-emitted messages only.
+    # Event params can contain the original prompt/embedded skill text; scanning
+    # them causes false positives for examples such as `STATUS: BLOCKED` inside
+    # a SKILL.md reference.
+    List.wrap(message)
   end
-
-  @spec nested_event_messages(term()) :: [String.t()]
-  defp nested_event_messages(value) when is_binary(value), do: [value]
-
-  defp nested_event_messages(value) when is_list(value) do
-    Enum.flat_map(value, &nested_event_messages/1)
-  end
-
-  defp nested_event_messages(value) when is_map(value) do
-    value
-    |> Map.values()
-    |> Enum.flat_map(&nested_event_messages/1)
-  end
-
-  defp nested_event_messages(_value), do: []
 
   @spec blocked_message?(String.t()) :: boolean()
   defp blocked_message?(message) do

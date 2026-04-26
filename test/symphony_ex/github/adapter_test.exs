@@ -227,6 +227,198 @@ defmodule SymphonyEx.GitHub.AdapterTest do
     assert issue.url == "https://github.com/example/repo/issues/12"
   end
 
+  test "includes In Review issues with unprocessed @Task comments as review follow-up candidates" do
+    request_fun = fn request ->
+      case {request.method, to_string(request.url)} do
+        {:post, "https://api.github.com/graphql"} ->
+          {:ok,
+           %Req.Response{
+             status: 200,
+             body: %{
+               "data" => %{
+                 "organization" => %{
+                   "projectV2" => %{
+                     "id" => "PVT_123",
+                     "items" => %{
+                       "nodes" => [
+                         %{
+                           "id" => "PVTI_123",
+                           "content" => %{
+                             "id" => "I_12",
+                             "number" => 12,
+                             "title" => "Review project analysis",
+                             "body" =>
+                               "Service: docs\nPaths: .review/2026-04-24.md\nTarget-PR: 3\nTarget-Branch: codex/review-doc\n",
+                             "url" => "https://github.com/example/repo/issues/12",
+                             "state" => "OPEN"
+                           },
+                           "fieldValues" => %{
+                             "nodes" => [
+                               %{
+                                 "name" => "In Review",
+                                 "field" => %{
+                                   "id" => "status-field",
+                                   "name" => "Status",
+                                   "options" => [
+                                     %{"id" => "opt_todo", "name" => "Todo"},
+                                     %{"id" => "opt_progress", "name" => "In Progress"},
+                                     %{"id" => "opt_review", "name" => "In Review"},
+                                     %{"id" => "opt_done", "name" => "Done"}
+                                   ]
+                                 }
+                               }
+                             ]
+                           }
+                         }
+                       ]
+                     }
+                   }
+                 },
+                 "user" => nil
+               }
+             }
+           }}
+
+        {:get, "https://api.github.com/repos/example/repo/issues/12/comments"} ->
+          {:ok,
+           %Req.Response{
+             status: 200,
+             body: [
+               %{
+                 "id" => 1001,
+                 "user" => %{"login" => "reviewer"},
+                 "body" => "@Task\n실행 방법을 더 명확히 적어줘.",
+                 "html_url" => "https://github.com/example/repo/issues/12#issuecomment-1001"
+               }
+             ]
+           }}
+
+        {:get, "https://api.github.com/repos/example/repo/issues/3/comments"} ->
+          {:ok, %Req.Response{status: 200, body: []}}
+
+        {:get, "https://api.github.com/repos/example/repo/pulls/3/comments"} ->
+          {:ok, %Req.Response{status: 200, body: []}}
+
+        other ->
+          flunk("unexpected request: #{inspect(other)}")
+      end
+    end
+
+    opts = [
+      api_key: "gh-token",
+      owner: "example",
+      repo: "repo",
+      project_number: 7,
+      active_states: ["Todo", "In Progress"],
+      review_task_states: ["In Review"],
+      request_fun: request_fun
+    ]
+
+    assert {:ok, [issue]} = Adapter.fetch_candidate_issues(opts)
+    assert issue.identifier == "12"
+    assert issue.state == "In Progress"
+    assert issue.target_pr == 3
+    assert issue.target_branch == "codex/review-doc"
+    assert issue.review_task_ids == ["issue-comment:1001"]
+    assert "symphony:review-task" in issue.labels
+    assert issue.description =~ "## Review Follow-up Task"
+    assert issue.description =~ "실행 방법을 더 명확히 적어줘."
+    assert issue.description =~ "Do not create a new PR"
+  end
+
+  test "includes In Review issues with issue @Task comments even when no PR exists" do
+    request_fun = fn request ->
+      case {request.method, to_string(request.url)} do
+        {:post, "https://api.github.com/graphql"} ->
+          {:ok,
+           %Req.Response{
+             status: 200,
+             body: %{
+               "data" => %{
+                 "organization" => %{
+                   "projectV2" => %{
+                     "id" => "PVT_123",
+                     "items" => %{
+                       "nodes" => [
+                         %{
+                           "id" => "PVTI_123",
+                           "content" => %{
+                             "id" => "I_12",
+                             "number" => 12,
+                             "title" => "Review planning note",
+                             "body" => "Service: docs\nPaths: docs/plan.md\n",
+                             "url" => "https://github.com/example/repo/issues/12",
+                             "state" => "OPEN"
+                           },
+                           "fieldValues" => %{
+                             "nodes" => [
+                               %{
+                                 "name" => "In Review",
+                                 "field" => %{
+                                   "id" => "status-field",
+                                   "name" => "Status",
+                                   "options" => [
+                                     %{"id" => "opt_todo", "name" => "Todo"},
+                                     %{"id" => "opt_progress", "name" => "In Progress"},
+                                     %{"id" => "opt_review", "name" => "In Review"},
+                                     %{"id" => "opt_done", "name" => "Done"}
+                                   ]
+                                 }
+                               }
+                             ]
+                           }
+                         }
+                       ]
+                     }
+                   }
+                 },
+                 "user" => nil
+               }
+             }
+           }}
+
+        {:get, "https://api.github.com/repos/example/repo/issues/12/comments"} ->
+          {:ok,
+           %Req.Response{
+             status: 200,
+             body: [
+               %{
+                 "id" => 2001,
+                 "user" => %{"login" => "reviewer"},
+                 "body" => "@Task pr\n필요하면 PR까지 만들어줘.",
+                 "html_url" => "https://github.com/example/repo/issues/12#issuecomment-2001"
+               }
+             ]
+           }}
+
+        other ->
+          flunk("unexpected request: #{inspect(other)}")
+      end
+    end
+
+    opts = [
+      api_key: "gh-token",
+      owner: "example",
+      repo: "repo",
+      project_number: 7,
+      active_states: ["Todo", "In Progress"],
+      review_task_states: ["In Review"],
+      request_fun: request_fun
+    ]
+
+    assert {:ok, [issue]} = Adapter.fetch_candidate_issues(opts)
+    assert issue.identifier == "12"
+    assert issue.target_pr == nil
+    assert issue.target_branch == nil
+    assert issue.review_task_ids == ["issue-comment:2001"]
+    assert "symphony:review-task" in issue.labels
+    assert issue.description =~ "## Issue Follow-up Task"
+    assert issue.description =~ "필요하면 PR까지 만들어줘."
+
+    assert issue.description =~
+             "Do not create a PR unless an explicit `@Task pr` command asks for one."
+  end
+
   test "filters project-backed candidates by issue identifier" do
     opts = [
       api_key: "gh-token",
@@ -241,7 +433,7 @@ defmodule SymphonyEx.GitHub.AdapterTest do
     assert {:ok, []} = Adapter.fetch_candidate_issues(opts)
   end
 
-  test "skips rerun candidates when issue body already indicates PR-created final state" do
+  test "keeps active project items dispatchable even when issue body contains stale terminal status block" do
     request_fun = fn request ->
       cond do
         to_string(request.url) == "https://api.github.com/graphql" and
@@ -262,12 +454,14 @@ defmodule SymphonyEx.GitHub.AdapterTest do
                              "number" => 14,
                              "title" => "Issue 14",
                              "body" =>
-                               "<!-- symphony:status -->\n## Symphony Status\n- Final status: pr_created\n- Pull request: PR #17 https://github.com/example/repo/pull/17\n<!-- /symphony:status -->"
+                               "Service: orchestration\nPaths: lib/symphony_ex/orchestrator.ex\n\n<!-- symphony:status -->\n## Symphony Status\n- Final status: in_review\n- Pull request: none\n<!-- /symphony:status -->",
+                             "url" => "https://github.com/example/repo/issues/14",
+                             "state" => "OPEN"
                            },
                            "fieldValues" => %{
                              "nodes" => [
                                %{
-                                 "name" => "In Progress",
+                                 "name" => "Todo",
                                  "field" => %{
                                    "id" => "status-field",
                                    "name" => "Status",
@@ -281,6 +475,59 @@ defmodule SymphonyEx.GitHub.AdapterTest do
                                }
                              ]
                            }
+                         }
+                       ]
+                     }
+                   }
+                 },
+                 "user" => nil
+               }
+             }
+           }}
+
+        true ->
+          flunk("unexpected request: #{inspect(request.method)} #{inspect(request.url)}")
+      end
+    end
+
+    opts = [
+      api_key: "gh-token",
+      owner: "example-org",
+      repo: "repo",
+      project_number: 7,
+      active_states: ["Todo", "In Progress"],
+      request_fun: request_fun
+    ]
+
+    assert {:ok, [issue]} = Adapter.fetch_candidate_issues(opts)
+    assert issue.identifier == "14"
+    assert issue.state == "Todo"
+  end
+
+  test "skips rerun candidates without project status when issue body already indicates PR-created final state" do
+    request_fun = fn request ->
+      cond do
+        to_string(request.url) == "https://api.github.com/graphql" and
+            String.contains?(request.options[:json]["query"], "query ProjectItems") ->
+          {:ok,
+           %Req.Response{
+             status: 200,
+             body: %{
+               "data" => %{
+                 "organization" => %{
+                   "projectV2" => %{
+                     "id" => "PVT_123",
+                     "items" => %{
+                       "nodes" => [
+                         %{
+                           "id" => "PVTI_123",
+                           "content" => %{
+                             "number" => 15,
+                             "title" => "Issue 15",
+                             "body" =>
+                               "<!-- symphony:status -->\n## Symphony Status\n- Final status: pr_created\n- Pull request: PR #17 https://github.com/example/repo/pull/17\n<!-- /symphony:status -->"
+                           },
+                           "fieldValues" => %{"nodes" => []}
                          }
                        ]
                      }
@@ -356,8 +603,10 @@ defmodule SymphonyEx.GitHub.AdapterTest do
       id: "I_kwDOA1",
       identifier: "14",
       title: "Title",
-      description: "Original body",
-      state: "Open"
+      description:
+        "Original body\n\nService: docs\nPaths: .review/2026-04-24.md\nTarget-Branch: main",
+      state: "Open",
+      target_branch: "main"
     }
 
     request_fun = fn request ->
@@ -373,7 +622,14 @@ defmodule SymphonyEx.GitHub.AdapterTest do
           cond do
             String.ends_with?(url, "/repos/example/repo/issues/14") ->
               {:ok,
-               %Req.Response{status: 200, body: %{"number" => 14, "body" => "Original body"}}}
+               %Req.Response{
+                 status: 200,
+                 body: %{
+                   "number" => 14,
+                   "body" =>
+                     "Original body\n\nService: docs\nPaths: .review/2026-04-24.md\nTarget-Branch: main"
+                 }
+               }}
 
             String.ends_with?(url, "/repos/example/repo/pulls") ->
               {:ok,
@@ -397,7 +653,12 @@ defmodule SymphonyEx.GitHub.AdapterTest do
           if String.ends_with?(url, "/repos/example/repo/issues/14") do
             body = request.options[:json][:body]
             assert body =~ "## Symphony Status"
+            assert body =~ "- Final status: pr_created"
             assert body =~ "PR #17 https://github.com/example/repo/pull/17"
+            assert body =~ "Target-PR: 17"
+            assert body =~ "Target-Branch: codex/issue-14-design-polish"
+            assert body =~ "Existing PR: https://github.com/example/repo/pull/17"
+            refute body =~ "Target-Branch: main"
             {:ok, %Req.Response{status: 200, body: %{"body" => body}}}
           else
             flunk("unexpected patch #{url}")
@@ -1451,7 +1712,7 @@ defmodule SymphonyEx.GitHub.AdapterTest do
       assert Lifecycle.resolve_project_status(lc, :running, nil) == "In Progress"
       assert Lifecycle.resolve_project_status(lc, :retry_queued, nil) == "Todo"
       assert Lifecycle.resolve_project_status(lc, :released, :success) == "In Review"
-      assert Lifecycle.resolve_project_status(lc, :released, :failed) == "Todo"
+      assert Lifecycle.resolve_project_status(lc, :released, :failed) == "In Review"
     end
   end
 

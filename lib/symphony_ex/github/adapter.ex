@@ -39,7 +39,8 @@ defmodule SymphonyEx.GitHub.Adapter do
         %{} = issue_map ->
           with {:ok, blocked_by_issues} <- Client.fetch_issue_blocked_by(identifier, opts) do
             {:ok,
-             to_issue(issue_map,
+             to_issue(
+               issue_map,
                opts
                |> Keyword.put(
                  :blocked_by_identifiers,
@@ -136,6 +137,7 @@ defmodule SymphonyEx.GitHub.Adapter do
       blocked_by_identifiers: Keyword.get(opts, :blocked_by_identifiers, []),
       target_branch: target_branch,
       target_pr: target_pr,
+      review_task_ids: Keyword.get(opts, :review_task_ids, []),
       parent_id: nil,
       children_ids: []
     }
@@ -169,18 +171,23 @@ defmodule SymphonyEx.GitHub.Adapter do
   defp update_issue_status_summary(%Issue{} = issue, attrs, opts) do
     if Map.get(attrs, :status) in [:released] do
       latest_body = latest_issue_description(issue, opts)
-      summary = render_issue_status_summary(issue, attrs, opts)
-      description = upsert_issue_status_summary(latest_body, summary)
+      related_pr = latest_related_pr(issue, attrs, opts)
+      summary = render_issue_status_summary(issue, attrs, related_pr)
+
+      description =
+        latest_body
+        |> upsert_related_pr_metadata(related_pr)
+        |> upsert_issue_status_summary(summary)
+        |> append_processed_review_tasks(issue)
+
       update_issue_description(issue.identifier, description, opts)
     else
       {:ok, %{"body" => issue.description || ""}}
     end
   end
 
-  @spec render_issue_status_summary(Issue.t(), map(), keyword()) :: String.t()
-  defp render_issue_status_summary(%Issue{} = issue, attrs, opts) do
-    related_pr = latest_related_pr(issue, attrs, opts)
-
+  @spec render_issue_status_summary(Issue.t(), map(), map() | nil) :: String.t()
+  defp render_issue_status_summary(%Issue{} = _issue, attrs, related_pr) do
     pr_line =
       case related_pr do
         nil -> "- Pull request: none"
@@ -238,28 +245,20 @@ defmodule SymphonyEx.GitHub.Adapter do
     body = pr["body"] || ""
     issue_number = to_string(issue.identifier)
 
-    explicit_target_match? =
-      cond do
-        is_integer(issue.target_pr) and is_binary(issue.target_branch) ->
-          pr_number == issue.target_pr and head_ref == issue.target_branch
+    cond do
+      is_integer(issue.target_pr) and is_binary(issue.target_branch) ->
+        pr_number == issue.target_pr and head_ref == issue.target_branch
 
-        is_integer(issue.target_pr) ->
-          pr_number == issue.target_pr
+      is_integer(issue.target_pr) ->
+        pr_number == issue.target_pr
 
-        is_binary(issue.target_branch) and String.trim(issue.target_branch) != "" ->
-          head_ref == issue.target_branch
+      is_binary(issue.target_branch) and String.trim(issue.target_branch) != "" and
+          head_ref == issue.target_branch ->
+        true
 
-        true ->
-          nil
-      end
-
-    case explicit_target_match? do
-      nil ->
+      true ->
         String.contains?(body, "##{issue_number}") or
           String.contains?(head_ref, "issue-#{issue_number}")
-
-      value ->
-        value
     end
   end
 
@@ -297,17 +296,109 @@ defmodule SymphonyEx.GitHub.Adapter do
     end
   end
 
+  @spec upsert_related_pr_metadata(String.t(), map() | nil) :: String.t()
+  defp upsert_related_pr_metadata(description, nil), do: description
+
+  defp upsert_related_pr_metadata(description, pr) do
+    pr_number = pr["number"]
+    head_ref = get_in(pr, ["head", "ref"]) || pr["headRefName"]
+    pr_url = pr["html_url"] || pr["url"]
+
+    if is_nil(pr_number) or is_nil(head_ref) or String.trim(to_string(head_ref)) == "" do
+      description
+    else
+      metadata_lines =
+        [
+          "Target-PR: #{pr_number}",
+          "Target-Branch: #{head_ref}",
+          if(pr_url, do: "Existing PR: #{pr_url}", else: nil)
+        ]
+        |> Enum.reject(&is_nil/1)
+
+      description
+      |> remove_pr_metadata_lines()
+      |> insert_pr_metadata_lines(metadata_lines)
+    end
+  end
+
+  @spec remove_pr_metadata_lines(String.t()) :: String.t()
+  defp remove_pr_metadata_lines(description) do
+    description
+    |> String.split("\n", trim: false)
+    |> Enum.reject(fn line ->
+      String.match?(line, ~r/^\s*(Target-PR|Target-Branch|Existing PR)\s*:/i)
+    end)
+    |> Enum.join("\n")
+  end
+
+  @spec insert_pr_metadata_lines(String.t(), [String.t()]) :: String.t()
+  defp insert_pr_metadata_lines(description, metadata_lines) do
+    status_index =
+      String.split(description, "\n", trim: false) |> Enum.find_index(&(&1 == @status_start))
+
+    lines = String.split(description, "\n", trim: false)
+
+    lines =
+      if is_integer(status_index) do
+        {before_status, from_status} = Enum.split(lines, status_index)
+        trim_trailing_blank_lines(before_status) ++ [""] ++ metadata_lines ++ [""] ++ from_status
+      else
+        (trim_trailing_blank_lines(lines) ++ ["", metadata_lines]) |> List.flatten()
+      end
+
+    lines |> Enum.join("\n") |> String.trim_trailing()
+  end
+
+  @spec trim_trailing_blank_lines([String.t()]) :: [String.t()]
+  defp trim_trailing_blank_lines(lines) do
+    lines
+    |> Enum.reverse()
+    |> Enum.drop_while(&(String.trim(&1) == ""))
+    |> Enum.reverse()
+  end
+
+  @spec append_processed_review_tasks(String.t(), Issue.t()) :: String.t()
+  defp append_processed_review_tasks(description, %Issue{review_task_ids: []}), do: description
+
+  defp append_processed_review_tasks(description, %Issue{review_task_ids: task_ids}) do
+    processed_lines = Enum.map(task_ids, &"processed_task: #{&1}")
+
+    block =
+      Enum.join(
+        ["<!-- symphony:review-tasks -->" | processed_lines] ++
+          ["<!-- /symphony:review-tasks -->"],
+        "\n"
+      )
+
+    String.trim_trailing(description) <> "\n\n" <> block
+  end
+
   @spec fetch_project_candidate_issues(keyword()) :: {:ok, [Issue.t()]} | {:error, term()}
   defp fetch_project_candidate_issues(opts) do
     active_states = Keyword.get(opts, :active_states, ["In Progress", "Todo"])
+    review_task_states = Keyword.get(opts, :review_task_states, ["In Review"])
     identifiers = Keyword.get(opts, :include_issue_identifiers, [])
 
     with {:ok, items} <- Client.list_project_items(Keyword.put(opts, :include_issue_body, true)) do
       issues =
         items
-        |> Enum.filter(&active_project_item?(&1, active_states))
-        |> Enum.map(&project_item_to_issue(&1, opts))
+        |> Enum.reduce([], fn item, acc ->
+          cond do
+            active_project_item?(item, active_states) ->
+              [project_item_to_issue(item, opts) | acc]
+
+            review_task_project_item?(item, review_task_states) ->
+              case project_item_to_review_task_issue(item, opts) do
+                nil -> acc
+                issue -> [issue | acc]
+              end
+
+            true ->
+              acc
+          end
+        end)
         |> Enum.reject(&is_nil/1)
+        |> Enum.reverse()
         |> maybe_filter_issue_identifiers(identifiers)
 
       {:ok, issues}
@@ -323,6 +414,40 @@ defmodule SymphonyEx.GitHub.Adapter do
 
   defp project_item_to_issue(_item, _opts), do: nil
 
+  @spec project_item_to_review_task_issue(map(), keyword()) :: Issue.t() | nil
+  defp project_item_to_review_task_issue(%{"content" => %{"number" => number} = issue}, opts) do
+    metadata = IssueBodyMetadata.parse(issue["body"] || "")
+    target_pr = metadata.target_pr
+
+    tasks = fetch_unprocessed_review_tasks(number, target_pr, issue["body"] || "", opts)
+
+    case tasks do
+      [] ->
+        nil
+
+      _ ->
+        issue
+        |> Map.put("state", "In Progress")
+        |> Map.put("body", build_review_task_description(issue["body"] || "", target_pr, tasks))
+        |> to_issue(
+          opts
+          |> Keyword.put(:review_task_ids, Enum.map(tasks, & &1.id))
+        )
+        |> Map.put(:state, "In Progress")
+        |> Map.update!(:labels, &Enum.uniq(["symphony:review-task" | &1]))
+    end
+  end
+
+  defp project_item_to_review_task_issue(_item, _opts), do: nil
+
+  @spec review_task_project_item?(map(), [String.t()]) :: boolean()
+  defp review_task_project_item?(item, review_task_states) do
+    status = project_item_status(item)
+    issue = Map.get(item, "content", %{})
+
+    is_map(issue) and is_integer(issue["number"]) and status in review_task_states
+  end
+
   @spec active_project_item?(map(), [String.t()]) :: boolean()
   defp active_project_item?(item, active_states) do
     status = project_item_status(item)
@@ -337,7 +462,8 @@ defmodule SymphonyEx.GitHub.Adapter do
     body = issue["body"] || ""
     status = project_item_status(item)
 
-    review_or_done_status?(status) or body_indicates_terminal_review_state?(body)
+    review_or_done_status?(status) or
+      (is_nil(status) and body_indicates_terminal_review_state?(body))
   end
 
   defp rerun_blocked_item?(_item), do: false
@@ -353,6 +479,165 @@ defmodule SymphonyEx.GitHub.Adapter do
   defp body_indicates_terminal_review_state?(body) do
     String.match?(body, ~r/Final status:\s*(pr_created|in_review|done)/i) or
       String.match?(body, ~r/Pull request:\s*PR\s*#/i)
+  end
+
+  @spec fetch_unprocessed_review_tasks(pos_integer(), pos_integer() | nil, String.t(), keyword()) ::
+          [
+            map()
+          ]
+  defp fetch_unprocessed_review_tasks(issue_number, target_pr, issue_body, opts) do
+    processed = processed_review_task_ids(issue_body)
+
+    sources =
+      [
+        {:issue_comment, issue_number, fn -> Client.fetch_issue_comments(issue_number, opts) end}
+      ] ++
+        if target_pr do
+          [
+            {:pr_comment, target_pr, fn -> Client.fetch_issue_comments(target_pr, opts) end},
+            {:pr_review_comment, target_pr,
+             fn -> Client.fetch_pull_request_review_comments(target_pr, opts) end}
+          ]
+        else
+          []
+        end
+
+    sources
+    |> Enum.flat_map(fn {source, number, fetch_fun} ->
+      case fetch_fun.() do
+        {:ok, comments} ->
+          comments
+          |> List.wrap()
+          |> Enum.map(&review_task_from_comment(source, number, &1))
+          |> Enum.reject(&is_nil/1)
+
+        {:error, _reason} ->
+          []
+      end
+    end)
+    |> Enum.reject(&MapSet.member?(processed, &1.id))
+  end
+
+  @spec review_task_from_comment(atom(), pos_integer(), map()) :: map() | nil
+  defp review_task_from_comment(source, number, %{"body" => body} = comment)
+       when is_binary(body) do
+    trimmed = String.trim_leading(body)
+
+    if String.match?(trimmed, ~r/^@Task\b/i) do
+      id = "#{review_task_source_prefix(source)}:#{comment["id"] || comment["node_id"] || number}"
+
+      %{
+        id: id,
+        source: source,
+        number: number,
+        author: get_in(comment, ["user", "login"]) || "unknown",
+        url: comment["html_url"] || comment["url"],
+        body: body
+      }
+    end
+  end
+
+  defp review_task_from_comment(_source, _number, _comment), do: nil
+
+  defp review_task_source_prefix(:issue_comment), do: "issue-comment"
+  defp review_task_source_prefix(:pr_comment), do: "pr-comment"
+  defp review_task_source_prefix(:pr_review_comment), do: "pr-review-comment"
+
+  @spec processed_review_task_ids(String.t()) :: MapSet.t(String.t())
+  defp processed_review_task_ids(body) do
+    Regex.scan(~r/processed[_ -]?task:\s*([^\s]+)/i, body || "")
+    |> Enum.map(fn [_full, id] -> String.trim(id) end)
+    |> MapSet.new()
+  end
+
+  @spec build_review_task_description(String.t(), pos_integer() | nil, [map()]) :: String.t()
+  defp build_review_task_description(original_body, target_pr, tasks) do
+    task_text =
+      tasks
+      |> Enum.map(fn task ->
+        [
+          "### #{task.id} by #{task.author}",
+          if(task.url, do: "URL: #{task.url}", else: nil),
+          "",
+          String.trim(task.body)
+        ]
+        |> Enum.reject(&is_nil/1)
+        |> Enum.join("\n")
+      end)
+      |> Enum.join("\n\n")
+
+    mode_heading = if target_pr, do: "## Review Follow-up Task", else: "## Issue Follow-up Task"
+
+    mode_description =
+      if target_pr do
+        "This issue is in review and has explicit `@Task` feedback for PR ##{target_pr}."
+      else
+        "This issue is in review and has explicit `@Task` feedback without an existing PR."
+      end
+
+    mode_rules =
+      if target_pr do
+        [
+          "- Do not create a new PR.",
+          "- Work only on the existing PR branch from `Target-Branch` / `Target-PR` metadata.",
+          "- Apply requested changes when valid, then push to the same branch.",
+          "- If a task should be ignored, leave a concise explanation in an issue or PR comment.",
+          "- Keep the issue in `In Review` unless an explicit `@Task merge` or `@Task done` command asks otherwise."
+        ] ++ pr_comment_command_rules(tasks)
+      else
+        [
+          "- Treat this as an issue follow-up task without an existing PR.",
+          "- Do not create a PR unless an explicit `@Task pr` command asks for one.",
+          "- Apply requested changes when valid; if no code/document changes are needed, leave a concise explanation.",
+          "- Keep the issue in `In Review` unless an explicit `@Task done` command asks otherwise."
+        ]
+      end
+
+    [
+      original_body,
+      "",
+      mode_heading,
+      mode_description,
+      "",
+      "## Tasks",
+      task_text,
+      "",
+      "## Rules"
+      | mode_rules
+    ]
+    |> Enum.join("\n")
+  end
+
+  @spec pr_comment_command_rules([map()]) :: [String.t()]
+  defp pr_comment_command_rules(tasks) do
+    bodies = Enum.map(tasks, &String.trim_leading(&1.body || ""))
+
+    []
+    |> maybe_add_review_comment_rule(bodies)
+    |> maybe_add_pr_review_rule(bodies)
+    |> Enum.reverse()
+  end
+
+  defp maybe_add_review_comment_rule(rules, bodies) do
+    if Enum.any?(bodies, &String.match?(&1, ~r/^@Task\s+review\s+comment\b/i)) do
+      [
+        "- `@Task review comment`: inspect the review comments added to the target PR, decide whether each comment has already been addressed, and apply only the changes that are still necessary."
+        | rules
+      ]
+    else
+      rules
+    end
+  end
+
+  defp maybe_add_pr_review_rule(rules, bodies) do
+    if Enum.any?(bodies, &String.match?(&1, ~r/^@Task\s+review\b(?!\s+comment\b)/i)) do
+      [
+        "- `@Task review`: review the current target PR diff using the appropriate GStack skill. Use `$gstack-designer-review` for design/UI/UX-focused changes and `$gstack-eng-review` for development/code/architecture/test changes."
+        | rules
+      ]
+    else
+      rules
+    end
   end
 
   @spec project_item_status(map()) :: String.t() | nil

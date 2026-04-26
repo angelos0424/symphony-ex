@@ -9,7 +9,11 @@ defmodule SymphonyEx.RuntimeSnapshotTest do
   test "normalizes running, retry, and completed entries for dashboard/api consumers" do
     Observability.reset()
     Observability.record_rate_limit(:github, %{remaining: 4321, limit: 5000, reset: "1775174400"})
-    Observability.record_write_back_stage("SYM-1", :github, :essential, :success, %{status: :running})
+
+    Observability.record_write_back_stage("SYM-1", :github, :essential, :success, %{
+      status: :running
+    })
+
     Observability.record_write_back_stage("SYM-0", :github, :optional, :partial, %{
       failed_stage: :label_sync_failed,
       reason: "labels_down"

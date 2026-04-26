@@ -62,29 +62,33 @@ defmodule SymphonyEx.Workspace do
     tracker = Keyword.get(opts, :tracker)
     tracker_opts = Keyword.get(opts, :tracker_opts, [])
     active_issue_identifiers = MapSet.new(Keyword.get(opts, :active_issue_identifiers, []))
-    tracked_worktrees = MapSet.new(active_worktree_paths(source_repo_path, shell))
 
-    if is_atom(tracker) do
-      root
-      |> inactive_worktree_candidates(source_repo_path, tracked_worktrees)
-      |> Enum.reject(&worktree_active_for_issue?(&1, active_issue_identifiers))
-      |> Enum.each(fn {path, issue_identifier} ->
-        if remove_inactive_worktree?(issue_identifier, tracker, tracker_opts) do
-          _ = remove(path, opts)
-        end
-      end)
+    if File.dir?(source_repo_path) do
+      tracked_worktrees = MapSet.new(active_worktree_paths(source_repo_path, shell))
 
-      root
-      |> orphaned_worktree_candidates(source_repo_path, tracked_worktrees)
-      |> Enum.reject(&worktree_active_for_issue?(&1, active_issue_identifiers))
-      |> Enum.each(fn {path, issue_identifier} ->
-        if remove_orphaned_worktree?(path, issue_identifier, tracker, tracker_opts, opts) do
-          _ = remove_orphaned_path(path)
-        end
-      end)
+      if is_atom(tracker) do
+        root
+        |> inactive_worktree_candidates(source_repo_path, tracked_worktrees)
+        |> Enum.reject(&worktree_active_for_issue?(&1, active_issue_identifiers))
+        |> Enum.each(fn {path, issue_identifier} ->
+          if remove_inactive_worktree?(issue_identifier, tracker, tracker_opts) do
+            _ = remove(path, opts)
+          end
+        end)
+
+        root
+        |> orphaned_worktree_candidates(source_repo_path, tracked_worktrees)
+        |> Enum.reject(&worktree_active_for_issue?(&1, active_issue_identifiers))
+        |> Enum.each(fn {path, issue_identifier} ->
+          if remove_orphaned_worktree?(path, issue_identifier, tracker, tracker_opts, opts) do
+            _ = remove_orphaned_path(path)
+          end
+        end)
+      end
+
+      _ = shell.("git", ["worktree", "prune"], cd: source_repo_path)
     end
 
-    _ = shell.("git", ["worktree", "prune"], cd: source_repo_path)
     :ok
   end
 

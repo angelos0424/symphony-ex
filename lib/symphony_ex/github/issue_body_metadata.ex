@@ -24,8 +24,22 @@ defmodule SymphonyEx.GitHub.IssueBodyMetadata do
   @service_keys MapSet.new(["service", "services"])
   @path_keys MapSet.new(["path", "paths"])
   @release_keys MapSet.new(["release"])
-  @target_branch_keys MapSet.new(["target-branch", "target_branch", "branch", "working-branch", "working_branch", "작업 브랜치"])
-  @target_pr_keys MapSet.new(["target-pr", "target_pr", "pr", "existing-pr", "existing_pr", "existing pr"])
+  @target_branch_keys MapSet.new([
+                        "target-branch",
+                        "target_branch",
+                        "branch",
+                        "working-branch",
+                        "working_branch",
+                        "작업 브랜치"
+                      ])
+  @target_pr_keys MapSet.new([
+                    "target-pr",
+                    "target_pr",
+                    "pr",
+                    "existing-pr",
+                    "existing_pr",
+                    "existing pr"
+                  ])
 
   @conflict_hint_prefixes %{
     "scope" => nil,

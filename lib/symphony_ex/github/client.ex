@@ -99,13 +99,26 @@ defmodule SymphonyEx.GitHub.Client do
     rest(:get, "/repos/#{owner}/#{repo}/pulls", opts, query: [state: "all", per_page: 100])
   end
 
-  @spec fetch_pull_request(String.t() | pos_integer(), keyword()) :: {:ok, map()} | {:error, term()}
+  @spec fetch_pull_request(String.t() | pos_integer(), keyword()) ::
+          {:ok, map()} | {:error, term()}
   def fetch_pull_request(number_or_identifier, opts) do
     owner = Keyword.fetch!(opts, :owner)
     repo = Keyword.fetch!(opts, :repo)
     pull_number = normalize_issue_number(number_or_identifier)
 
     rest(:get, "/repos/#{owner}/#{repo}/pulls/#{pull_number}", opts)
+  end
+
+  @spec fetch_pull_request_review_comments(String.t() | pos_integer(), keyword()) ::
+          {:ok, [comment_map()]} | {:error, term()}
+  def fetch_pull_request_review_comments(number_or_identifier, opts) do
+    owner = Keyword.fetch!(opts, :owner)
+    repo = Keyword.fetch!(opts, :repo)
+    pull_number = normalize_issue_number(number_or_identifier)
+
+    rest(:get, "/repos/#{owner}/#{repo}/pulls/#{pull_number}/comments", opts,
+      query: [per_page: 100]
+    )
   end
 
   @spec update_issue_body(String.t() | pos_integer(), String.t(), keyword()) ::

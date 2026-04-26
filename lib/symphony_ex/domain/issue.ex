@@ -20,6 +20,7 @@ defmodule SymphonyEx.Domain.Issue do
           blocked_by_identifiers: [String.t()],
           target_branch: String.t() | nil,
           target_pr: pos_integer() | nil,
+          review_task_ids: [String.t()],
           parent_id: String.t() | nil,
           children_ids: [String.t()]
         }
@@ -41,6 +42,7 @@ defmodule SymphonyEx.Domain.Issue do
     blocked_by_identifiers: [],
     target_branch: nil,
     target_pr: nil,
+    review_task_ids: [],
     children_ids: []
   ]
 end

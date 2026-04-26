@@ -73,6 +73,39 @@ defmodule SymphonyEx.PromptBuilderTest do
     assert Enum.any?(paths, &String.ends_with?(&1, "gstack-not-installed/SKILL.md"))
   end
 
+  test "strips embedded symphony status blocks from the rendered prompt while preserving user instructions" do
+    workflow_path = tmp_path("workflow-status.md")
+    File.write!(workflow_path, "Task: <%= issue.title %>\nBody:\n<%= issue.description %>\n")
+
+    issue = %Issue{
+      id: "1",
+      identifier: "11",
+      title: "Review cp progress",
+      description:
+        Enum.join(
+          [
+            "Service: orchestration",
+            "Paths: lib/symphony_ex/orchestrator.ex",
+            "",
+            "Review the current cp rollout.",
+            "",
+            "<!-- symphony:status -->",
+            "## Symphony Status",
+            "- Final status: in_review",
+            "- Attempt: 0",
+            "<!-- /symphony:status -->"
+          ],
+          "\n"
+        ),
+      state: "Todo"
+    }
+
+    assert {:ok, prompt} = PromptBuilder.build(workflow_path, issue)
+    assert prompt =~ "Review the current cp rollout."
+    refute prompt =~ "## Symphony Status"
+    refute prompt =~ "Final status: in_review"
+  end
+
   defp tmp_path(name) do
     Path.join(
       System.tmp_dir!(),

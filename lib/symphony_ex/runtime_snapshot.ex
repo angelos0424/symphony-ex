@@ -637,7 +637,8 @@ defmodule SymphonyEx.RuntimeSnapshot do
 
   defp candidate_poll_backoff_until(nil), do: nil
 
-  defp candidate_poll_backoff_until(next_candidate_poll_at_ms) when is_integer(next_candidate_poll_at_ms) do
+  defp candidate_poll_backoff_until(next_candidate_poll_at_ms)
+       when is_integer(next_candidate_poll_at_ms) do
     next_candidate_poll_at_ms
     |> DateTime.from_unix!(:millisecond)
     |> DateTime.to_iso8601()

@@ -1,6 +1,9 @@
 ---
 tracker:
   kind: github
+  owner: angelos0424
+  repo: holywords
+  project-number: 3
   active-states:
     - Todo
     - In Progress
@@ -10,12 +13,13 @@ tracker:
   write-back:
     enabled: true
 workspace:
-  source_repo_url: $SOURCE_REPO_URL
+  root: /srv/symphony/repo-a/worktrees
+  source-cache-root: /srv/symphony/repo-a/source-cache
 orchestrator:
+  poll-interval-ms: 60000
   max-concurrent: 1
   max-retries: 3
   backoff-base-ms: 10000
-  poll-interval-ms: 30000
 codex:
   command: codex app-server
   thread-sandbox: dangerFullAccess
@@ -23,8 +27,10 @@ codex:
   turn-timeout-ms: 3600000
   stall-timeout-ms: 900000
 logging:
-  format: pretty
+  format: json
   level: info
+dashboard:
+  enabled: false
 ---
 You are an unattended coding agent working on GitHub issue <%= issue.identifier %>: "<%= issue.title %>".
 
@@ -48,8 +54,6 @@ Current state: <%= issue.state %>
 ## GitHub/Project State Guidance
 - Treat issues in `Todo` and `In Progress` as active.
 - Treat issues in `In Review` and `Done` as terminal and do no work.
-- Use the current GitHub Project status as the authoritative dispatch state.
-- If the issue body contains a `<!-- symphony:status --> ... <!-- /symphony:status -->` block, treat it as historical breadcrumb text only; it may be stale and must not override an active project status like `Todo` or `In Progress`.
 - If the issue is not in a supported state, report that briefly and stop.
 
 ## Execution Guidelines
