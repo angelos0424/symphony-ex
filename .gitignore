@@ -26,3 +26,10 @@ erl_crash.dump
 symphony_ex-*.tar
 
 .env
+# Local runtime environment files. Keep examples tracked.
+*.env
+.env.*
+!*.env.example
+deploy/docker/env/*.env
+!deploy/docker/env/*.env.example
+
