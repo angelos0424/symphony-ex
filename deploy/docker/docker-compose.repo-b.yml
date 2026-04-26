@@ -1,0 +1,25 @@
+name: symphony-repo-b
+
+services:
+  symphony-repo-b:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    container_name: symphony-repo-b
+    restart: unless-stopped
+    init: true
+    env_file:
+      - ./env/common.env
+      - ./env/repo-b.env
+    environment:
+      SYMPHONY_WORKFLOW_PATH: /app/workflows/repo-b.WORKFLOW.md
+      SYMPHONY_DASHBOARD_ENABLED: "false"
+    volumes:
+      - ${HOME}/.codex:/run/host-codex:ro
+      - ./workflows/repo-b.WORKFLOW.md:/app/workflows/repo-b.WORKFLOW.md:ro
+      - repo_b_worktrees:/srv/symphony/repo-b/worktrees
+      - repo_b_source_cache:/srv/symphony/repo-b/source-cache
+
+volumes:
+  repo_b_worktrees:
+  repo_b_source_cache:

@@ -113,6 +113,36 @@ volumes:
   source-cache:
 ```
 
+## Multi-repo Docker Compose starter
+
+단일 repo compose 예시만으로 부족할 때는 아래 템플릿을 시작점으로 쓰면 됩니다.
+
+- `deploy/docker/Dockerfile`
+- `deploy/docker/docker-compose.repo-a.yml`
+- `deploy/docker/docker-compose.repo-b.yml`
+- `deploy/docker/env/common.env`
+- `deploy/docker/env/repo-a.env`
+- `deploy/docker/env/repo-b.env`
+- `deploy/docker/workflows/repo-a.WORKFLOW.md`
+- `deploy/docker/workflows/repo-b.WORKFLOW.md`
+- `deploy/docker/README.md`
+
+권장 운영 기본값:
+
+- repo-a = `holywords`
+- repo-b = `cp` / `church_platform`
+- repo별 container 1개
+- repo별 workflow 1개
+- repo별 workspace volume 1개
+- repo별 source-cache volume 1개
+- `poll-interval-ms: 60000`
+- `max-concurrent: 1`
+- dashboard disabled
+- GitHub API auth는 `GITHUB_TOKEN`
+- git clone/fetch auth는 SSH (`git@github.com:...`)
+
+이 starter는 Intel N100 같은 소형 호스트에서도 무리하지 않도록 보수적인 값으로 맞춰져 있습니다.
+
 ## systemd 배포
 
 ```ini
@@ -183,12 +213,18 @@ tracker:
   owner: my-org
   repo: my-repo
   project-number: 7
+  active-states:
+    - Todo
+    - In Progress
+  terminal-states:
+    - In Review
+    - Done
 workspace:
   root: /opt/symphony/worktrees
   source-repo-url: git@github.com:my-org/my-repo.git
   source-cache-root: /opt/symphony/source-cache
 orchestrator:
-  poll-interval-ms: 30000
+  poll-interval-ms: 60000
   max-concurrent: 1
   max-retries: 3
 codex:

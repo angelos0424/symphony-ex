@@ -47,6 +47,7 @@ tracker:
     - Todo
     - In Progress
   terminal-states:
+    - In Review
     - Done
   lifecycle:
     claimed:
@@ -162,6 +163,34 @@ The dashboard is intentionally bounded:
 - orchestrator settings snapshot
 
 If enabled, `dashboard.secret_key_base` or `SYMPHONY_DASHBOARD_SECRET_KEY_BASE` is required at startup.
+
+## Multi-repo Docker Compose starter
+
+For a **repo-per-container** operating model, use the templates under:
+
+- `deploy/docker/Dockerfile`
+- `deploy/docker/docker-compose.repo-a.yml`
+- `deploy/docker/docker-compose.repo-b.yml`
+- `deploy/docker/env/common.env`
+- `deploy/docker/env/repo-a.env`
+- `deploy/docker/env/repo-b.env`
+- `deploy/docker/workflows/repo-a.WORKFLOW.md`
+- `deploy/docker/workflows/repo-b.WORKFLOW.md`
+- `deploy/docker/README.md`
+
+This starter is intentionally conservative for small hosts:
+
+- repo-a = `holywords`
+- repo-b = `cp` / `church_platform`
+- one container per repo/project
+- one workflow per repo
+- one worktree volume per repo
+- one source-cache volume per repo
+- `poll-interval-ms: 60000`
+- `max-concurrent: 1`
+- dashboard disabled
+- GitHub API auth via `GITHUB_TOKEN`
+- git clone/fetch auth via SSH (`git@github.com:...`)
 
 ## Development
 
