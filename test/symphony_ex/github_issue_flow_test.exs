@@ -376,6 +376,15 @@ defmodule SymphonyEx.GitHubIssueFlowTest do
     assert List.last(control.run_descriptions) =~ "$gstack-designer-review"
     assert List.last(control.run_descriptions) =~ "$gstack-eng-review"
 
+    assert List.last(control.run_descriptions) =~
+             "Completion requires a visible PR review result"
+
+    assert List.last(control.run_descriptions) =~
+             "verdict (`approved`, `commented`, `changes-requested`, or `changes-applied`)"
+
+    assert List.last(control.run_descriptions) =~
+             "post the final `@Task review result` after the push"
+
     assert Enum.any?(
              control.issue_bodies,
              &String.contains?(&1, "processed_task: issue-comment:1001")

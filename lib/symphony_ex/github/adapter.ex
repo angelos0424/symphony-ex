@@ -632,7 +632,10 @@ defmodule SymphonyEx.GitHub.Adapter do
   defp maybe_add_pr_review_rule(rules, bodies) do
     if Enum.any?(bodies, &String.match?(&1, ~r/^@Task\s+review\b(?!\s+comment\b)/i)) do
       [
-        "- `@Task review`: review the current target PR diff using the appropriate GStack skill. Use `$gstack-designer-review` for design/UI/UX-focused changes and `$gstack-eng-review` for development/code/architecture/test changes."
+        "- `@Task review`: review the current target PR diff using the appropriate GStack skill. Use `$gstack-designer-review` for design/UI/UX-focused changes and `$gstack-eng-review` for development/code/architecture/test changes.",
+        "  - Completion requires a visible PR review result, not only a \"follow-up pushed\" summary.",
+        "  - The final PR comment or review must include: verdict (`approved`, `commented`, `changes-requested`, or `changes-applied`), findings reviewed, actions taken, validation performed, and remaining risks or `none`.",
+        "  - If reviewing leads to new commits, push them, re-check the resulting diff, then post the final `@Task review result` after the push."
         | rules
       ]
     else
