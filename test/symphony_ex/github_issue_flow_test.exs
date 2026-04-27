@@ -382,6 +382,8 @@ defmodule SymphonyEx.GitHubIssueFlowTest do
     assert List.last(control.run_descriptions) =~
              "verdict (`approved`, `commented`, `changes-requested`, or `changes-applied`)"
 
+    assert List.last(control.run_descriptions) =~ "work result summary (`작업 결과 요약`)"
+
     assert List.last(control.run_descriptions) =~
              "post the final `@Task review result` after the push"
 

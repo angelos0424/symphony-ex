@@ -634,7 +634,7 @@ defmodule SymphonyEx.GitHub.Adapter do
       [
         "- `@Task review`: review the current target PR diff using the appropriate GStack skill. Use `$gstack-designer-review` for design/UI/UX-focused changes and `$gstack-eng-review` for development/code/architecture/test changes.",
         "  - Completion requires a visible PR review result, not only a \"follow-up pushed\" summary.",
-        "  - The final PR comment or review must include: verdict (`approved`, `commented`, `changes-requested`, or `changes-applied`), findings reviewed, actions taken, validation performed, and remaining risks or `none`.",
+        "  - The final PR comment or review must include: verdict (`approved`, `commented`, `changes-requested`, or `changes-applied`), findings reviewed, actions taken, work result summary (`작업 결과 요약`), validation performed, and remaining risks or `none`.",
         "  - If reviewing leads to new commits, push them, re-check the resulting diff, then post the final `@Task review result` after the push."
         | rules
       ]
