@@ -87,7 +87,7 @@ Current state: <%= issue.state %>
 
 ### PR comment command rules
 - `@Task review comment`: inspect the review comments added to the target PR, decide whether each comment has already been addressed, and apply only the changes that are still necessary.
-- `@Task review`: review the current target PR diff using the appropriate GStack skill. Use `$gstack-designer-review` for design/UI/UX-focused changes and `$gstack-eng-review` for development/code/architecture/test changes.
+- `@Task review`: review the current target PR diff using the appropriate GStack skill. Use `$gstack-design-review` for design/UI/UX-focused changes and `$gstack-eng-review` for development/code/architecture/test changes.
   - Completion requires a visible PR review result, not only a "follow-up pushed" summary.
   - Do not edit files, create commits, or push changes for plain `@Task review`; leave requested fixes as review findings instead.
   - The final PR comment or review must include: verdict (`approved`, `commented`, `changes-requested`, or `changes-applied`), findings reviewed, actions taken, work result summary (`작업 결과 요약`), validation performed, and remaining risks or `none`.

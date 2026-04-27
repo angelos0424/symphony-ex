@@ -397,7 +397,7 @@ defmodule SymphonyEx.GitHubIssueFlowTest do
     assert List.last(control.run_descriptions) =~
              "`@Task review`: review the current target PR diff"
 
-    assert List.last(control.run_descriptions) =~ "$gstack-designer-review"
+    assert List.last(control.run_descriptions) =~ "$gstack-design-review"
     assert List.last(control.run_descriptions) =~ "$gstack-eng-review"
 
     assert List.last(control.run_descriptions) =~
