@@ -194,7 +194,7 @@ defmodule SymphonyEx.GitHub.Adapter do
     pr_line =
       case related_pr do
         nil -> "- Pull request: none"
-        pr -> "- Pull request: PR ##{pr["number"]} #{pr["html_url"]}"
+        pr -> "- Pull request: PR ##{pr["number"]}"
       end
 
     outcome =

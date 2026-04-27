@@ -598,7 +598,7 @@ defmodule SymphonyEx.GitHub.AdapterTest do
     assert body =~ "<!-- symphony:managed -->"
   end
 
-  test "write_run_record updates issue body summary with PR URL" do
+  test "write_run_record updates issue body summary with PR number and keeps PR URL in metadata" do
     issue = %Issue{
       id: "I_kwDOA1",
       identifier: "14",
@@ -654,7 +654,8 @@ defmodule SymphonyEx.GitHub.AdapterTest do
             body = request.options[:json][:body]
             assert body =~ "## Symphony Status"
             assert body =~ "- Final status: pr_created"
-            assert body =~ "PR #17 https://github.com/example/repo/pull/17"
+            assert body =~ "- Pull request: PR #17"
+            refute body =~ "- Pull request: PR #17 https://github.com/example/repo/pull/17"
             assert body =~ "Target-PR: 17"
             assert body =~ "Target-Branch: codex/issue-14-design-polish"
             assert body =~ "Existing PR: https://github.com/example/repo/pull/17"
