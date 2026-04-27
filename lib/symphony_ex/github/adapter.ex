@@ -16,6 +16,7 @@ defmodule SymphonyEx.GitHub.Adapter do
   @managed_end "<!-- /symphony:managed -->"
   @status_start "<!-- symphony:status -->"
   @status_end "<!-- /symphony:status -->"
+  @review_task_completion_reaction "hooray"
 
   @spec fetch_candidate_issues(keyword()) :: {:ok, [Issue.t()]} | {:error, term()}
   def fetch_candidate_issues(opts) do
@@ -89,6 +90,7 @@ defmodule SymphonyEx.GitHub.Adapter do
 
       case sync_write_back(issue, attrs, opts) do
         :ok ->
+          maybe_add_review_task_completion_reactions(issue, attrs, opts)
           {:ok, response}
 
         {:ok, {:partial, stage, reason}} ->
@@ -97,6 +99,7 @@ defmodule SymphonyEx.GitHub.Adapter do
             reason: inspect(reason)
           })
 
+          maybe_add_review_task_completion_reactions(issue, attrs, opts)
           annotate_partial_write_back(issue, attrs, stage, reason, opts)
           {:ok, response}
 
@@ -178,7 +181,7 @@ defmodule SymphonyEx.GitHub.Adapter do
         latest_body
         |> upsert_related_pr_metadata(related_pr)
         |> upsert_issue_status_summary(summary)
-        |> append_processed_review_tasks(issue)
+        |> append_processed_review_tasks(issue, attrs)
 
       update_issue_description(issue.identifier, description, opts)
     else
@@ -357,10 +360,19 @@ defmodule SymphonyEx.GitHub.Adapter do
     |> Enum.reverse()
   end
 
-  @spec append_processed_review_tasks(String.t(), Issue.t()) :: String.t()
-  defp append_processed_review_tasks(description, %Issue{review_task_ids: []}), do: description
+  @spec append_processed_review_tasks(String.t(), Issue.t(), map()) :: String.t()
+  defp append_processed_review_tasks(description, %Issue{review_task_ids: []}, _attrs),
+    do: description
 
-  defp append_processed_review_tasks(description, %Issue{review_task_ids: task_ids}) do
+  defp append_processed_review_tasks(description, %Issue{review_task_ids: task_ids}, attrs) do
+    if Map.get(attrs, :result) == :success do
+      append_successful_processed_review_tasks(description, task_ids)
+    else
+      description
+    end
+  end
+
+  defp append_successful_processed_review_tasks(description, task_ids) when is_list(task_ids) do
     processed_lines = Enum.map(task_ids, &"processed_task: #{&1}")
 
     block =
@@ -372,6 +384,58 @@ defmodule SymphonyEx.GitHub.Adapter do
 
     String.trim_trailing(description) <> "\n\n" <> block
   end
+
+  @spec maybe_add_review_task_completion_reactions(Issue.t(), map(), keyword()) :: :ok
+  defp maybe_add_review_task_completion_reactions(%Issue{review_task_ids: []}, _attrs, _opts),
+    do: :ok
+
+  defp maybe_add_review_task_completion_reactions(%Issue{review_task_ids: task_ids}, attrs, opts) do
+    if Map.get(attrs, :status) == :released and Map.get(attrs, :result) == :success do
+      Enum.each(task_ids, &add_review_task_completion_reaction(&1, opts))
+    end
+
+    :ok
+  end
+
+  @spec add_review_task_completion_reaction(String.t(), keyword()) :: :ok
+  defp add_review_task_completion_reaction(task_id, opts) do
+    case parse_review_task_id(task_id) do
+      {:issue_comment, comment_id} ->
+        Client.create_issue_comment_reaction(comment_id, @review_task_completion_reaction, opts)
+
+      {:pr_comment, comment_id} ->
+        Client.create_issue_comment_reaction(comment_id, @review_task_completion_reaction, opts)
+
+      {:pr_review_comment, comment_id} ->
+        Client.create_pull_request_review_comment_reaction(
+          comment_id,
+          @review_task_completion_reaction,
+          opts
+        )
+
+      :error ->
+        :ok
+    end
+
+    :ok
+  end
+
+  @spec parse_review_task_id(String.t()) ::
+          {:issue_comment | :pr_comment | :pr_review_comment, pos_integer()} | :error
+  defp parse_review_task_id(task_id) do
+    with [source, raw_id] <- String.split(to_string(task_id), ":", parts: 2),
+         {comment_id, ""} <- Integer.parse(raw_id),
+         source when not is_nil(source) <- review_task_source_atom(source) do
+      {source, comment_id}
+    else
+      _ -> :error
+    end
+  end
+
+  defp review_task_source_atom("issue-comment"), do: :issue_comment
+  defp review_task_source_atom("pr-comment"), do: :pr_comment
+  defp review_task_source_atom("pr-review-comment"), do: :pr_review_comment
+  defp review_task_source_atom(_source), do: nil
 
   @spec fetch_project_candidate_issues(keyword()) :: {:ok, [Issue.t()]} | {:error, term()}
   defp fetch_project_candidate_issues(opts) do
@@ -523,7 +587,7 @@ defmodule SymphonyEx.GitHub.Adapter do
        when is_binary(body) do
     trimmed = String.trim_leading(body)
 
-    if String.match?(trimmed, ~r/^@Task\b/i) do
+    if String.match?(trimmed, ~r/^@Task\b/i) and not completed_review_task_comment?(comment) do
       id = "#{review_task_source_prefix(source)}:#{comment["id"] || comment["node_id"] || number}"
 
       %{
@@ -538,6 +602,19 @@ defmodule SymphonyEx.GitHub.Adapter do
   end
 
   defp review_task_from_comment(_source, _number, _comment), do: nil
+
+  @spec completed_review_task_comment?(map()) :: boolean()
+  defp completed_review_task_comment?(comment) do
+    reactions = Map.get(comment, "reactions") || Map.get(comment, :reactions) || %{}
+
+    reaction_count(reactions, @review_task_completion_reaction) > 0
+  end
+
+  defp reaction_count(reactions, key) when is_map(reactions) do
+    Map.get(reactions, key) || Map.get(reactions, :hooray) || 0
+  end
+
+  defp reaction_count(_reactions, _key), do: 0
 
   defp review_task_source_prefix(:issue_comment), do: "issue-comment"
   defp review_task_source_prefix(:pr_comment), do: "pr-comment"
