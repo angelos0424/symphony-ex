@@ -355,7 +355,7 @@ defmodule SymphonyEx.GitHubIssueFlowTest do
     end)
 
     Control.set_issue_body(
-      "Service: docs\nPaths: .review/2026-04-24.md\nTarget-PR: 3\nTarget-Branch: codex/review-doc\n"
+      "Service: docs\nPaths: .review/2026-04-24.md\nTarget-PR: 3\nTarget-Branch: codex/review-doc\n\n<!-- symphony:review-tasks -->\nprocessed_task: issue-comment:1001\n<!-- /symphony:review-tasks -->\n"
     )
 
     Control.set_project_status("In Review")
@@ -416,7 +416,7 @@ defmodule SymphonyEx.GitHubIssueFlowTest do
 
     assert Enum.any?(
              control.issue_bodies,
-             &String.contains?(&1, "processed_task: issue-comment:1001")
+             &String.contains?(&1, "processed_task: issue-comment:1001 status: success")
            )
 
     assert Enum.map(control.comment_reactions, & &1.content) == ["hooray", "hooray", "hooray"]
@@ -425,6 +425,60 @@ defmodule SymphonyEx.GitHubIssueFlowTest do
              control.comment_reactions,
              &String.ends_with?(&1.url, "/issues/comments/1001/reactions")
            )
+  end
+
+  test "skips @Task comments with successful processed status even without reactions" do
+    Control.set_issue_body(
+      "Service: docs\nPaths: .review/2026-04-24.md\nTarget-PR: 3\nTarget-Branch: codex/review-doc\n\n<!-- symphony:review-tasks -->\nprocessed_task: issue-comment:1001 status: success\n<!-- /symphony:review-tasks -->\n"
+    )
+
+    Control.set_project_status("In Review")
+
+    Control.set_inbound_issue_comments([
+      %{
+        "id" => 1001,
+        "user" => %{"login" => "reviewer"},
+        "body" => "@Task\n리뷰 문서의 실행 방법을 보완해줘.",
+        "html_url" => "https://github.com/example/repo/issues/12#issuecomment-1001"
+      }
+    ])
+
+    orchestrator =
+      start_supervised!(
+        {Orchestrator,
+         tracker: SymphonyEx.GitHub.Adapter,
+         workspace: MockWorkspace,
+         agent_runner: MockAgentRunner,
+         tracker_opts: [
+           api_key: "gh-token",
+           owner: "example",
+           repo: "repo",
+           project_number: 7,
+           active_states: ["Todo", "In Progress"],
+           review_task_states: ["In Review"],
+           terminal_states: ["Done"],
+           write_back: [in_progress_state_names: ["In Progress"]],
+           request_fun: &Control.request/1
+         ],
+         workspace_opts: [],
+         workflow_path: "/tmp/WORKFLOW.md",
+         codex: [],
+         poll_interval_ms: 25,
+         retry_backoff_ms: 10,
+         max_retry_backoff_ms: 10,
+         max_retries: 1,
+         max_concurrent: 1,
+         task_supervisor: SymphonyEx.IntegrationAgentWorkers}
+      )
+
+    Process.sleep(75)
+
+    snapshot = Orchestrator.snapshot(orchestrator)
+    control = Control.snapshot()
+
+    assert snapshot.completed == []
+    assert control.run_calls == []
+    assert control.comment_reactions == []
   end
 
   test "skips @Task comments that already have Symphony completion reactions" do

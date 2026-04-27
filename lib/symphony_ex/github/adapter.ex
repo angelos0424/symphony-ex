@@ -373,7 +373,7 @@ defmodule SymphonyEx.GitHub.Adapter do
   end
 
   defp append_successful_processed_review_tasks(description, task_ids) when is_list(task_ids) do
-    processed_lines = Enum.map(task_ids, &"processed_task: #{&1}")
+    processed_lines = Enum.map(task_ids, &"processed_task: #{&1} status: success")
 
     block =
       Enum.join(
@@ -622,9 +622,25 @@ defmodule SymphonyEx.GitHub.Adapter do
 
   @spec processed_review_task_ids(String.t()) :: MapSet.t(String.t())
   defp processed_review_task_ids(body) do
-    Regex.scan(~r/processed[_ -]?task:\s*([^\s]+)/i, body || "")
-    |> Enum.map(fn [_full, id] -> String.trim(id) end)
+    body
+    |> to_string()
+    |> String.split("\n")
+    |> Enum.flat_map(&processed_review_task_id_from_line/1)
     |> MapSet.new()
+  end
+
+  defp processed_review_task_id_from_line(line) do
+    case Regex.run(~r/processed[_ -]?task:\s*([^\s]+)(.*)$/i, line || "") do
+      [_full, id, rest] ->
+        if String.match?(rest, ~r/\b(?:status|result):\s*(?:success|completed)\b/i) do
+          [String.trim(id)]
+        else
+          []
+        end
+
+      _other ->
+        []
+    end
   end
 
   @spec build_review_task_description(String.t(), pos_integer() | nil, [map()]) :: String.t()
