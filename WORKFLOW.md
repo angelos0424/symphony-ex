@@ -45,6 +45,22 @@ Current state: <%= issue.state %>
 - If requirements are genuinely unclear or a required credential/secret is missing, stop and report the blocker clearly.
 - Do not invent extra scope, cleanup, or follow-up work unless explicitly requested by the issue.
 
+## PR Review Feedback Policy
+- Do not apply PR review comments, PR review-thread comments, bot suggestions, GitHub suggestion blocks, or reviewer feedback unless the active task explicitly asks to handle review feedback.
+- Commands such as `@Task ... pr 만들어줘` mean create or update the PR, report validation, and stop. They do not authorize applying review feedback that appears after the PR is opened.
+- If PR review comments are visible while checking PR, diff, or CI state, treat them as human-gated follow-up work. Do not edit files, commit, or push for those comments.
+- Only apply PR review feedback for explicit commands such as `@Task review comment`, `@Task 리뷰 반영`, `@Task PR #N 리뷰 코멘트 수정해`, or another direct request to fix review feedback.
+- For bot review comments, the same rule applies: visibility is not permission.
+
+## PR Creation Stop Condition
+- When the active task is to create a PR, the run is complete after:
+  1. the branch is pushed,
+  2. the PR exists,
+  3. requested local/GitHub validation has been reported, and
+  4. the issue receives the PR metadata/comment when applicable.
+- After those conditions are met, do not make additional commits unless the active task explicitly asks for further changes.
+- Do not treat newly observed PR comments, bot reviews, or reviewer suggestions as part of the same PR-creation task.
+
 ## GitHub/Project State Guidance
 - Treat issues in `Todo` and `In Progress` as active.
 - Treat issues in `In Review` and `Done` as terminal and do no work.
@@ -79,11 +95,16 @@ Current state: <%= issue.state %>
 - If `Target-PR` / `Target-Branch` metadata exists, work on that existing PR branch, push to it, and do not create a new PR.
 - If no `Target-PR` exists, treat it as an issue follow-up; do not create a PR unless the task explicitly says `@Task pr`.
 - Apply valid requested changes. If a task should be ignored, explain the reason in a concise comment or final summary.
+- Review feedback is actionable only when it appears inside the generated follow-up task or the active task explicitly asks to handle it.
 - Keep the issue in `In Review` by default. Only merge or move to `Done` when the task explicitly says `@Task merge` or `@Task done`.
 
 ### PR comment command rules
 - `@Task review comment`: inspect the review comments added to the target PR, decide whether each comment has already been addressed, and apply only the changes that are still necessary.
-- `@Task review`: review the current target PR diff using the appropriate GStack skill. Use `$gstack-designer-review` for design/UI/UX-focused changes and `$gstack-eng-review` for development/code/architecture/test changes.
+- `@Task review`: review the current target PR diff using the appropriate GStack skill. Use `$gstack-design-review` for design/UI/UX-focused changes and `$gstack-eng-review` for development/code/architecture/test changes.
+  - Completion requires a visible PR review result, not only a "follow-up pushed" summary.
+  - Do not edit files, create commits, or push changes for plain `@Task review`; leave requested fixes as review findings instead.
+  - The final PR comment or review must include: verdict (`approved`, `commented`, `changes-requested`, or `changes-applied`), findings reviewed, actions taken, work result summary (`작업 결과 요약`), validation performed, and remaining risks or `none`.
+  - Only apply code changes when the task explicitly asks to apply or fix feedback, such as `@Task`, `@Task review comment`, or a direct change request.
 
 ## Final Response Format
 Return only a single summary block in exactly this format:

@@ -16,6 +16,7 @@ defmodule SymphonyEx.GitHub.Adapter do
   @managed_end "<!-- /symphony:managed -->"
   @status_start "<!-- symphony:status -->"
   @status_end "<!-- /symphony:status -->"
+  @review_task_completion_reaction "hooray"
 
   @spec fetch_candidate_issues(keyword()) :: {:ok, [Issue.t()]} | {:error, term()}
   def fetch_candidate_issues(opts) do
@@ -89,6 +90,7 @@ defmodule SymphonyEx.GitHub.Adapter do
 
       case sync_write_back(issue, attrs, opts) do
         :ok ->
+          maybe_add_review_task_completion_reactions(issue, attrs, opts)
           {:ok, response}
 
         {:ok, {:partial, stage, reason}} ->
@@ -97,6 +99,7 @@ defmodule SymphonyEx.GitHub.Adapter do
             reason: inspect(reason)
           })
 
+          maybe_add_review_task_completion_reactions(issue, attrs, opts)
           annotate_partial_write_back(issue, attrs, stage, reason, opts)
           {:ok, response}
 
@@ -151,7 +154,7 @@ defmodule SymphonyEx.GitHub.Adapter do
       "issue: #{issue.identifier}",
       "status: #{Map.fetch!(attrs, :status)}",
       "attempt: #{Map.fetch!(attrs, :attempt)}",
-      "updated_at: #{DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()}"
+      "updated_at: #{issue_timestamp()}"
     ]
 
     extra_lines =
@@ -178,7 +181,7 @@ defmodule SymphonyEx.GitHub.Adapter do
         latest_body
         |> upsert_related_pr_metadata(related_pr)
         |> upsert_issue_status_summary(summary)
-        |> append_processed_review_tasks(issue)
+        |> append_processed_review_tasks(issue, attrs)
 
       update_issue_description(issue.identifier, description, opts)
     else
@@ -191,7 +194,7 @@ defmodule SymphonyEx.GitHub.Adapter do
     pr_line =
       case related_pr do
         nil -> "- Pull request: none"
-        pr -> "- Pull request: PR ##{pr["number"]} #{pr["html_url"]}"
+        pr -> "- Pull request: PR ##{pr["number"]}"
       end
 
     outcome =
@@ -216,7 +219,7 @@ defmodule SymphonyEx.GitHub.Adapter do
         "- Final status: #{outcome}",
         "- Attempt: #{Map.get(attrs, :attempt, 0)}",
         pr_line,
-        "- Updated at: #{DateTime.utc_now() |> DateTime.to_iso8601()}"
+        "- Updated at: #{issue_timestamp()}"
       ],
       "\n"
     )
@@ -357,11 +360,20 @@ defmodule SymphonyEx.GitHub.Adapter do
     |> Enum.reverse()
   end
 
-  @spec append_processed_review_tasks(String.t(), Issue.t()) :: String.t()
-  defp append_processed_review_tasks(description, %Issue{review_task_ids: []}), do: description
+  @spec append_processed_review_tasks(String.t(), Issue.t(), map()) :: String.t()
+  defp append_processed_review_tasks(description, %Issue{review_task_ids: []}, _attrs),
+    do: description
 
-  defp append_processed_review_tasks(description, %Issue{review_task_ids: task_ids}) do
-    processed_lines = Enum.map(task_ids, &"processed_task: #{&1}")
+  defp append_processed_review_tasks(description, %Issue{review_task_ids: task_ids}, attrs) do
+    if Map.get(attrs, :result) == :success do
+      append_successful_processed_review_tasks(description, task_ids)
+    else
+      description
+    end
+  end
+
+  defp append_successful_processed_review_tasks(description, task_ids) when is_list(task_ids) do
+    processed_lines = Enum.map(task_ids, &"processed_task: #{&1} status: success")
 
     block =
       Enum.join(
@@ -372,6 +384,58 @@ defmodule SymphonyEx.GitHub.Adapter do
 
     String.trim_trailing(description) <> "\n\n" <> block
   end
+
+  @spec maybe_add_review_task_completion_reactions(Issue.t(), map(), keyword()) :: :ok
+  defp maybe_add_review_task_completion_reactions(%Issue{review_task_ids: []}, _attrs, _opts),
+    do: :ok
+
+  defp maybe_add_review_task_completion_reactions(%Issue{review_task_ids: task_ids}, attrs, opts) do
+    if Map.get(attrs, :status) == :released and Map.get(attrs, :result) == :success do
+      Enum.each(task_ids, &add_review_task_completion_reaction(&1, opts))
+    end
+
+    :ok
+  end
+
+  @spec add_review_task_completion_reaction(String.t(), keyword()) :: :ok
+  defp add_review_task_completion_reaction(task_id, opts) do
+    case parse_review_task_id(task_id) do
+      {:issue_comment, comment_id} ->
+        Client.create_issue_comment_reaction(comment_id, @review_task_completion_reaction, opts)
+
+      {:pr_comment, comment_id} ->
+        Client.create_issue_comment_reaction(comment_id, @review_task_completion_reaction, opts)
+
+      {:pr_review_comment, comment_id} ->
+        Client.create_pull_request_review_comment_reaction(
+          comment_id,
+          @review_task_completion_reaction,
+          opts
+        )
+
+      :error ->
+        :ok
+    end
+
+    :ok
+  end
+
+  @spec parse_review_task_id(String.t()) ::
+          {:issue_comment | :pr_comment | :pr_review_comment, pos_integer()} | :error
+  defp parse_review_task_id(task_id) do
+    with [source, raw_id] <- String.split(to_string(task_id), ":", parts: 2),
+         {comment_id, ""} <- Integer.parse(raw_id),
+         source when not is_nil(source) <- review_task_source_atom(source) do
+      {source, comment_id}
+    else
+      _ -> :error
+    end
+  end
+
+  defp review_task_source_atom("issue-comment"), do: :issue_comment
+  defp review_task_source_atom("pr-comment"), do: :pr_comment
+  defp review_task_source_atom("pr-review-comment"), do: :pr_review_comment
+  defp review_task_source_atom(_source), do: nil
 
   @spec fetch_project_candidate_issues(keyword()) :: {:ok, [Issue.t()]} | {:error, term()}
   defp fetch_project_candidate_issues(opts) do
@@ -523,7 +587,7 @@ defmodule SymphonyEx.GitHub.Adapter do
        when is_binary(body) do
     trimmed = String.trim_leading(body)
 
-    if String.match?(trimmed, ~r/^@Task\b/i) do
+    if String.match?(trimmed, ~r/^@Task\b/i) and not completed_review_task_comment?(comment) do
       id = "#{review_task_source_prefix(source)}:#{comment["id"] || comment["node_id"] || number}"
 
       %{
@@ -539,15 +603,44 @@ defmodule SymphonyEx.GitHub.Adapter do
 
   defp review_task_from_comment(_source, _number, _comment), do: nil
 
+  @spec completed_review_task_comment?(map()) :: boolean()
+  defp completed_review_task_comment?(comment) do
+    reactions = Map.get(comment, "reactions") || Map.get(comment, :reactions) || %{}
+
+    reaction_count(reactions, @review_task_completion_reaction) > 0
+  end
+
+  defp reaction_count(reactions, key) when is_map(reactions) do
+    Map.get(reactions, key) || Map.get(reactions, :hooray) || 0
+  end
+
+  defp reaction_count(_reactions, _key), do: 0
+
   defp review_task_source_prefix(:issue_comment), do: "issue-comment"
   defp review_task_source_prefix(:pr_comment), do: "pr-comment"
   defp review_task_source_prefix(:pr_review_comment), do: "pr-review-comment"
 
   @spec processed_review_task_ids(String.t()) :: MapSet.t(String.t())
   defp processed_review_task_ids(body) do
-    Regex.scan(~r/processed[_ -]?task:\s*([^\s]+)/i, body || "")
-    |> Enum.map(fn [_full, id] -> String.trim(id) end)
+    body
+    |> to_string()
+    |> String.split("\n")
+    |> Enum.flat_map(&processed_review_task_id_from_line/1)
     |> MapSet.new()
+  end
+
+  defp processed_review_task_id_from_line(line) do
+    case Regex.run(~r/processed[_ -]?task:\s*([^\s]+)(.*)$/i, line || "") do
+      [_full, id, rest] ->
+        if String.match?(rest, ~r/\b(?:status|result):\s*(?:success|completed)\b/i) do
+          [String.trim(id)]
+        else
+          []
+        end
+
+      _other ->
+        []
+    end
   end
 
   @spec build_review_task_description(String.t(), pos_integer() | nil, [map()]) :: String.t()
@@ -632,7 +725,11 @@ defmodule SymphonyEx.GitHub.Adapter do
   defp maybe_add_pr_review_rule(rules, bodies) do
     if Enum.any?(bodies, &String.match?(&1, ~r/^@Task\s+review\b(?!\s+comment\b)/i)) do
       [
-        "- `@Task review`: review the current target PR diff using the appropriate GStack skill. Use `$gstack-designer-review` for design/UI/UX-focused changes and `$gstack-eng-review` for development/code/architecture/test changes."
+        "- `@Task review`: review the current target PR diff using the appropriate GStack skill. Use `$gstack-design-review` for design/UI/UX-focused changes and `$gstack-eng-review` for development/code/architecture/test changes.",
+        "  - Completion requires a visible PR review result, not only a \"follow-up pushed\" summary.",
+        "  - Do not edit files, create commits, or push changes for plain `@Task review`; leave requested fixes as review findings instead.",
+        "  - The final PR comment or review must include: verdict (`approved`, `commented`, `changes-requested`, or `changes-applied`), findings reviewed, actions taken, work result summary (`작업 결과 요약`), validation performed, and remaining risks or `none`.",
+        "  - Only apply code changes when the task explicitly asks to apply or fix feedback, such as `@Task`, `@Task review comment`, or a direct change request."
         | rules
       ]
     else
@@ -1392,4 +1489,15 @@ defmodule SymphonyEx.GitHub.Adapter do
   defp format_metadata_value(value) when is_binary(value), do: value
   defp format_metadata_value(value) when is_atom(value), do: Atom.to_string(value)
   defp format_metadata_value(value), do: inspect(value)
+
+  @spec issue_timestamp() :: String.t()
+  defp issue_timestamp do
+    # GitHub's own created_at/updated_at fields are UTC, but human-readable
+    # Symphony issue body/comment metadata should follow the operator timezone.
+    # Keep this fixed to KST without depending on a BEAM timezone database.
+    DateTime.utc_now()
+    |> DateTime.truncate(:second)
+    |> DateTime.add(9 * 60 * 60, :second)
+    |> Calendar.strftime("%Y-%m-%dT%H:%M:%S+09:00")
+  end
 end

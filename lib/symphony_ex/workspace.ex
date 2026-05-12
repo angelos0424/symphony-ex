@@ -6,7 +6,7 @@ defmodule SymphonyEx.Workspace do
   alias SymphonyEx.Domain.Issue
   alias SymphonyEx.{SessionStore, SourceRepo}
 
-  @default_stale_orphan_ttl_ms :timer.hours(1)
+  @default_stale_orphan_ttl_ms :timer.hours(24)
 
   @type shell_fun :: (String.t(), [String.t()], keyword() -> {binary(), non_neg_integer()})
   @type prepare_reason :: :fresh | {:reset, atom()} | {:recover, SessionStore.session_data()}

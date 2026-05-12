@@ -91,6 +91,17 @@ defmodule SymphonyEx.GitHub.Client do
     )
   end
 
+  @spec create_issue_comment_reaction(pos_integer(), String.t(), keyword()) ::
+          {:ok, map()} | {:error, term()}
+  def create_issue_comment_reaction(comment_id, content, opts) when is_integer(comment_id) do
+    owner = Keyword.fetch!(opts, :owner)
+    repo = Keyword.fetch!(opts, :repo)
+
+    rest(:post, "/repos/#{owner}/#{repo}/issues/comments/#{comment_id}/reactions", opts,
+      json: %{content: content}
+    )
+  end
+
   @spec list_pull_requests(keyword()) :: {:ok, [map()]} | {:error, term()}
   def list_pull_requests(opts) do
     owner = Keyword.fetch!(opts, :owner)
@@ -118,6 +129,18 @@ defmodule SymphonyEx.GitHub.Client do
 
     rest(:get, "/repos/#{owner}/#{repo}/pulls/#{pull_number}/comments", opts,
       query: [per_page: 100]
+    )
+  end
+
+  @spec create_pull_request_review_comment_reaction(pos_integer(), String.t(), keyword()) ::
+          {:ok, map()} | {:error, term()}
+  def create_pull_request_review_comment_reaction(comment_id, content, opts)
+      when is_integer(comment_id) do
+    owner = Keyword.fetch!(opts, :owner)
+    repo = Keyword.fetch!(opts, :repo)
+
+    rest(:post, "/repos/#{owner}/#{repo}/pulls/comments/#{comment_id}/reactions", opts,
+      json: %{content: content}
     )
   end
 
