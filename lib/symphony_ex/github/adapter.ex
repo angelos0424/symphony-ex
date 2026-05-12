@@ -154,7 +154,7 @@ defmodule SymphonyEx.GitHub.Adapter do
       "issue: #{issue.identifier}",
       "status: #{Map.fetch!(attrs, :status)}",
       "attempt: #{Map.fetch!(attrs, :attempt)}",
-      "updated_at: #{DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()}"
+      "updated_at: #{issue_timestamp()}"
     ]
 
     extra_lines =
@@ -219,7 +219,7 @@ defmodule SymphonyEx.GitHub.Adapter do
         "- Final status: #{outcome}",
         "- Attempt: #{Map.get(attrs, :attempt, 0)}",
         pr_line,
-        "- Updated at: #{DateTime.utc_now() |> DateTime.to_iso8601()}"
+        "- Updated at: #{issue_timestamp()}"
       ],
       "\n"
     )
@@ -1489,4 +1489,15 @@ defmodule SymphonyEx.GitHub.Adapter do
   defp format_metadata_value(value) when is_binary(value), do: value
   defp format_metadata_value(value) when is_atom(value), do: Atom.to_string(value)
   defp format_metadata_value(value), do: inspect(value)
+
+  @spec issue_timestamp() :: String.t()
+  defp issue_timestamp do
+    # GitHub's own created_at/updated_at fields are UTC, but human-readable
+    # Symphony issue body/comment metadata should follow the operator timezone.
+    # Keep this fixed to KST without depending on a BEAM timezone database.
+    DateTime.utc_now()
+    |> DateTime.truncate(:second)
+    |> DateTime.add(9 * 60 * 60, :second)
+    |> Calendar.strftime("%Y-%m-%dT%H:%M:%S+09:00")
+  end
 end

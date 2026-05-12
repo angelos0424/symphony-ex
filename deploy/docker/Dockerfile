@@ -19,7 +19,7 @@ RUN mix release
 FROM node:22-bullseye-slim AS runtime
 
 ARG CODEX_NPM_VERSION=latest
-RUN apt-get update && apt-get install -y ca-certificates git openssh-client inotify-tools locales && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y ca-certificates git openssh-client inotify-tools locales tzdata && rm -rf /var/lib/apt/lists/*
 RUN sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen && locale-gen
 RUN npm install -g @openai/codex@${CODEX_NPM_VERSION}
 
@@ -30,5 +30,6 @@ RUN chmod +x /usr/local/bin/symphony-entrypoint
 
 ENV LANG=en_US.UTF-8
 ENV LC_ALL=en_US.UTF-8
+ENV TZ=Asia/Seoul
 ENV ELIXIR_ERL_OPTIONS=+fnu
 ENTRYPOINT ["/usr/local/bin/symphony-entrypoint"]
