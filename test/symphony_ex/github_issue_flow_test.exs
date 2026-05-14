@@ -158,7 +158,9 @@ defmodule SymphonyEx.GitHubIssueFlowTest do
           }
 
           {{:ok, %Req.Response{status: 201, body: reaction}},
-           %{state | comment_reactions: [reaction | state.comment_reactions]}}
+           state
+           |> Map.update!(:comment_reactions, &[reaction | &1])
+           |> put_inbound_comment_reaction(reaction.url, reaction.content)}
 
         request.method == :post and
           String.contains?(to_string(request.url), "/repos/example/repo/pulls/comments/") and
@@ -169,7 +171,9 @@ defmodule SymphonyEx.GitHubIssueFlowTest do
           }
 
           {{:ok, %Req.Response{status: 201, body: reaction}},
-           %{state | comment_reactions: [reaction | state.comment_reactions]}}
+           state
+           |> Map.update!(:comment_reactions, &[reaction | &1])
+           |> put_inbound_comment_reaction(reaction.url, reaction.content)}
 
         request.method == :get and
             String.ends_with?(to_string(request.url), "/repos/example/repo/pulls") ->
@@ -241,6 +245,35 @@ defmodule SymphonyEx.GitHubIssueFlowTest do
     defp project_status_for("opt_done"), do: "Done"
     defp project_status_for(_other), do: "Todo"
 
+    defp put_inbound_comment_reaction(state, url, content) do
+      case Regex.run(~r{/comments/(\d+)/reactions$}, to_string(url)) do
+        [_full, raw_id] ->
+          {comment_id, ""} = Integer.parse(raw_id)
+
+          Map.update!(state, :inbound_issue_comments, fn comments ->
+            Enum.map(comments, fn
+              %{"id" => ^comment_id} = comment -> add_reaction_count(comment, content)
+              comment -> comment
+            end)
+          end)
+
+        _other ->
+          state
+      end
+    end
+
+    defp add_reaction_count(comment, content) do
+      reactions = Map.get(comment, "reactions") || %{"total_count" => 0}
+      current = Map.get(reactions, content, 0)
+      total = Map.get(reactions, "total_count", 0)
+
+      comment
+      |> Map.put(
+        "reactions",
+        reactions |> Map.put(content, current + 1) |> Map.put("total_count", total + 1)
+      )
+    end
+
     defp error_response(request) do
       flunk("unexpected request: #{inspect(request.method)} #{inspect(request.url)}")
     end
@@ -256,6 +289,13 @@ defmodule SymphonyEx.GitHubIssueFlowTest do
     def run(issue, _opts) do
       Control.record_run(issue)
       %{status: :success, events: [], error: nil}
+    end
+  end
+
+  defmodule MockFailingAgentRunner do
+    def run(issue, _opts) do
+      Control.record_run(issue)
+      %{status: :failed, events: [], error: "blocked", error_category: "test_blocked"}
     end
   end
 
@@ -419,7 +459,14 @@ defmodule SymphonyEx.GitHubIssueFlowTest do
              &String.contains?(&1, "processed_task: issue-comment:1001 status: success")
            )
 
-    assert Enum.map(control.comment_reactions, & &1.content) == ["hooray", "hooray", "hooray"]
+    assert Enum.map(control.comment_reactions, & &1.content) == [
+             "eyes",
+             "eyes",
+             "eyes",
+             "hooray",
+             "hooray",
+             "hooray"
+           ]
 
     assert Enum.any?(
              control.comment_reactions,
@@ -534,6 +581,119 @@ defmodule SymphonyEx.GitHubIssueFlowTest do
     assert snapshot.completed == []
     assert control.run_calls == []
     assert control.comment_reactions == []
+  end
+
+  test "skips @Task comments already claimed or blocked by lifecycle reactions" do
+    Control.set_issue_body(
+      "Service: docs\nPaths: .review/2026-04-24.md\nTarget-PR: 3\nTarget-Branch: codex/review-doc\n"
+    )
+
+    Control.set_project_status("In Review")
+
+    Control.set_inbound_issue_comments([
+      %{
+        "id" => 1001,
+        "user" => %{"login" => "reviewer"},
+        "body" => "@Task\n리뷰 문서의 실행 방법을 보완해줘.",
+        "html_url" => "https://github.com/example/repo/issues/12#issuecomment-1001",
+        "reactions" => %{"eyes" => 1, "total_count" => 1}
+      },
+      %{
+        "id" => 1002,
+        "user" => %{"login" => "reviewer"},
+        "body" => "@Task\n막힌 작업을 다시 봐줘.",
+        "html_url" => "https://github.com/example/repo/issues/12#issuecomment-1002",
+        "reactions" => %{"confused" => 1, "total_count" => 1}
+      }
+    ])
+
+    orchestrator =
+      start_supervised!(
+        {Orchestrator,
+         tracker: SymphonyEx.GitHub.Adapter,
+         workspace: MockWorkspace,
+         agent_runner: MockAgentRunner,
+         tracker_opts: [
+           api_key: "gh-token",
+           owner: "example",
+           repo: "repo",
+           project_number: 7,
+           active_states: ["Todo", "In Progress"],
+           review_task_states: ["In Review"],
+           terminal_states: ["Done"],
+           write_back: [in_progress_state_names: ["In Progress"]],
+           request_fun: &Control.request/1
+         ],
+         workspace_opts: [],
+         workflow_path: "/tmp/WORKFLOW.md",
+         codex: [],
+         poll_interval_ms: 25,
+         retry_backoff_ms: 10,
+         max_retry_backoff_ms: 10,
+         max_retries: 1,
+         max_concurrent: 1,
+         task_supervisor: SymphonyEx.IntegrationAgentWorkers}
+      )
+
+    Process.sleep(75)
+
+    snapshot = Orchestrator.snapshot(orchestrator)
+    control = Control.snapshot()
+
+    assert snapshot.completed == []
+    assert control.run_calls == []
+    assert control.comment_reactions == []
+  end
+
+  test "marks failed @Task review follow-up with blocked reaction" do
+    Control.set_issue_body("Service: docs\nPaths: .review/2026-04-24.md\n")
+    Control.set_project_status("In Review")
+
+    Control.set_inbound_issue_comments([
+      %{
+        "id" => 1001,
+        "user" => %{"login" => "reviewer"},
+        "body" => "@Task\n다시 확인해줘.",
+        "html_url" => "https://github.com/example/repo/issues/12#issuecomment-1001"
+      }
+    ])
+
+    orchestrator =
+      start_supervised!(
+        {Orchestrator,
+         tracker: SymphonyEx.GitHub.Adapter,
+         workspace: MockWorkspace,
+         agent_runner: MockFailingAgentRunner,
+         tracker_opts: [
+           api_key: "gh-token",
+           owner: "example",
+           repo: "repo",
+           project_number: 7,
+           active_states: ["Todo", "In Progress"],
+           review_task_states: ["In Review"],
+           terminal_states: ["Done"],
+           write_back: [in_progress_state_names: ["In Progress"]],
+           request_fun: &Control.request/1
+         ],
+         workspace_opts: [],
+         workflow_path: "/tmp/WORKFLOW.md",
+         codex: [],
+         poll_interval_ms: 25,
+         retry_backoff_ms: 10,
+         max_retry_backoff_ms: 10,
+         max_retries: 0,
+         max_concurrent: 1,
+         task_supervisor: SymphonyEx.IntegrationAgentWorkers}
+      )
+
+    wait_until(fn ->
+      snapshot = Orchestrator.snapshot(orchestrator)
+      Control.snapshot().run_calls == ["12"] and length(snapshot.completed) == 1
+    end)
+
+    control = Control.snapshot()
+    assert control.project_status == "In Review"
+    assert Enum.map(control.comment_reactions, & &1.content) == ["eyes", "confused"]
   end
 
   test "skips ambiguous issues with a visible missing metadata reason" do

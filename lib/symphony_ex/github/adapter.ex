@@ -16,7 +16,9 @@ defmodule SymphonyEx.GitHub.Adapter do
   @managed_end "<!-- /symphony:managed -->"
   @status_start "<!-- symphony:status -->"
   @status_end "<!-- /symphony:status -->"
+  @review_task_claim_reaction "eyes"
   @review_task_completion_reaction "hooray"
+  @review_task_blocked_reaction "confused"
 
   @spec fetch_candidate_issues(keyword()) :: {:ok, [Issue.t()]} | {:error, term()}
   def fetch_candidate_issues(opts) do
@@ -390,26 +392,36 @@ defmodule SymphonyEx.GitHub.Adapter do
     do: :ok
 
   defp maybe_add_review_task_completion_reactions(%Issue{review_task_ids: task_ids}, attrs, opts) do
-    if Map.get(attrs, :status) == :released and Map.get(attrs, :result) == :success do
-      Enum.each(task_ids, &add_review_task_completion_reaction(&1, opts))
+    if Map.get(attrs, :status) == :released do
+      reaction =
+        case Map.get(attrs, :result) do
+          :success -> @review_task_completion_reaction
+          :failed -> @review_task_blocked_reaction
+          :cancelled -> @review_task_blocked_reaction
+          _other -> nil
+        end
+
+      if reaction do
+        Enum.each(task_ids, &add_review_task_reaction(&1, reaction, opts))
+      end
     end
 
     :ok
   end
 
-  @spec add_review_task_completion_reaction(String.t(), keyword()) :: :ok
-  defp add_review_task_completion_reaction(task_id, opts) do
+  @spec add_review_task_reaction(String.t(), String.t(), keyword()) :: :ok
+  defp add_review_task_reaction(task_id, reaction, opts) do
     case parse_review_task_id(task_id) do
       {:issue_comment, comment_id} ->
-        Client.create_issue_comment_reaction(comment_id, @review_task_completion_reaction, opts)
+        Client.create_issue_comment_reaction(comment_id, reaction, opts)
 
       {:pr_comment, comment_id} ->
-        Client.create_issue_comment_reaction(comment_id, @review_task_completion_reaction, opts)
+        Client.create_issue_comment_reaction(comment_id, reaction, opts)
 
       {:pr_review_comment, comment_id} ->
         Client.create_pull_request_review_comment_reaction(
           comment_id,
-          @review_task_completion_reaction,
+          reaction,
           opts
         )
 
@@ -490,6 +502,8 @@ defmodule SymphonyEx.GitHub.Adapter do
         nil
 
       _ ->
+        claim_review_tasks(tasks, opts)
+
         issue
         |> Map.put("state", "In Progress")
         |> Map.put("body", build_review_task_description(issue["body"] || "", target_pr, tasks))
@@ -503,6 +517,10 @@ defmodule SymphonyEx.GitHub.Adapter do
   end
 
   defp project_item_to_review_task_issue(_item, _opts), do: nil
+
+  defp claim_review_tasks(tasks, opts) do
+    Enum.each(tasks, &add_review_task_reaction(&1.id, @review_task_claim_reaction, opts))
+  end
 
   @spec review_task_project_item?(map(), [String.t()]) :: boolean()
   defp review_task_project_item?(item, review_task_states) do
@@ -587,7 +605,7 @@ defmodule SymphonyEx.GitHub.Adapter do
        when is_binary(body) do
     trimmed = String.trim_leading(body)
 
-    if String.match?(trimmed, ~r/^@Task\b/i) and not completed_review_task_comment?(comment) do
+    if String.match?(trimmed, ~r/^@Task\b/i) and not review_task_comment_inactive?(comment) do
       id = "#{review_task_source_prefix(source)}:#{comment["id"] || comment["node_id"] || number}"
 
       %{
@@ -603,15 +621,22 @@ defmodule SymphonyEx.GitHub.Adapter do
 
   defp review_task_from_comment(_source, _number, _comment), do: nil
 
-  @spec completed_review_task_comment?(map()) :: boolean()
-  defp completed_review_task_comment?(comment) do
+  @spec review_task_comment_inactive?(map()) :: boolean()
+  defp review_task_comment_inactive?(comment) do
     reactions = Map.get(comment, "reactions") || Map.get(comment, :reactions) || %{}
 
-    reaction_count(reactions, @review_task_completion_reaction) > 0
+    Enum.any?(
+      [
+        @review_task_completion_reaction,
+        @review_task_claim_reaction,
+        @review_task_blocked_reaction
+      ],
+      &(reaction_count(reactions, &1) > 0)
+    )
   end
 
   defp reaction_count(reactions, key) when is_map(reactions) do
-    Map.get(reactions, key) || Map.get(reactions, :hooray) || 0
+    Map.get(reactions, key) || Map.get(reactions, String.to_atom(key)) || 0
   end
 
   defp reaction_count(_reactions, _key), do: 0
