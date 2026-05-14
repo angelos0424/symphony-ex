@@ -395,7 +395,7 @@ defmodule SymphonyEx.OrchestratorTest do
            status: :success,
            error: nil,
            last_message:
-             "Warning: Exceeded skills context budget of 2%. Loaded skill descriptions were truncated.",
+             "Skill descriptions were shortened to fit the 2% skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest.",
            events: [
              %Events{
                event: :item_completed,
@@ -442,7 +442,8 @@ defmodule SymphonyEx.OrchestratorTest do
 
     assert Enum.any?(Control.comments(), fn %{issue_identifier: identifier, body: body} ->
              identifier == "SUMMARY-WARN" and body =~ "completed engineering review" and
-               not String.contains?(body, "Exceeded skills context budget")
+               not String.contains?(body, "skills context budget") and
+               not String.contains?(body, "Skill descriptions were shortened")
            end)
   end
 
