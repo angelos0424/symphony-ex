@@ -92,7 +92,7 @@ defmodule SymphonyEx.GitHub.Adapter do
 
       case sync_write_back(issue, attrs, opts) do
         :ok ->
-          maybe_add_review_task_completion_reactions(issue, attrs, opts)
+          maybe_add_review_task_lifecycle_reactions(issue, attrs, opts)
           {:ok, response}
 
         {:ok, {:partial, stage, reason}} ->
@@ -101,7 +101,7 @@ defmodule SymphonyEx.GitHub.Adapter do
             reason: inspect(reason)
           })
 
-          maybe_add_review_task_completion_reactions(issue, attrs, opts)
+          maybe_add_review_task_lifecycle_reactions(issue, attrs, opts)
           annotate_partial_write_back(issue, attrs, stage, reason, opts)
           {:ok, response}
 
@@ -387,23 +387,31 @@ defmodule SymphonyEx.GitHub.Adapter do
     String.trim_trailing(description) <> "\n\n" <> block
   end
 
-  @spec maybe_add_review_task_completion_reactions(Issue.t(), map(), keyword()) :: :ok
-  defp maybe_add_review_task_completion_reactions(%Issue{review_task_ids: []}, _attrs, _opts),
+  @spec maybe_add_review_task_lifecycle_reactions(Issue.t(), map(), keyword()) :: :ok
+  defp maybe_add_review_task_lifecycle_reactions(%Issue{review_task_ids: []}, _attrs, _opts),
     do: :ok
 
-  defp maybe_add_review_task_completion_reactions(%Issue{review_task_ids: task_ids}, attrs, opts) do
-    if Map.get(attrs, :status) == :released do
-      reaction =
-        case Map.get(attrs, :result) do
-          :success -> @review_task_completion_reaction
-          :failed -> @review_task_blocked_reaction
-          :cancelled -> @review_task_blocked_reaction
-          _other -> nil
-        end
+  defp maybe_add_review_task_lifecycle_reactions(%Issue{review_task_ids: task_ids}, attrs, opts) do
+    status = Map.get(attrs, :status)
+    result = Map.get(attrs, :result)
 
-      if reaction do
-        Enum.each(task_ids, &add_review_task_reaction(&1, reaction, opts))
+    reaction =
+      cond do
+        status == :claimed ->
+          @review_task_claim_reaction
+
+        status == :released and result == :success ->
+          @review_task_completion_reaction
+
+        status == :released and result in [:failed, :cancelled] ->
+          @review_task_blocked_reaction
+
+        true ->
+          nil
       end
+
+    if reaction do
+      Enum.each(task_ids, &add_review_task_reaction(&1, reaction, opts))
     end
 
     :ok
@@ -502,8 +510,6 @@ defmodule SymphonyEx.GitHub.Adapter do
         nil
 
       _ ->
-        claim_review_tasks(tasks, opts)
-
         issue
         |> Map.put("state", "In Progress")
         |> Map.put("body", build_review_task_description(issue["body"] || "", target_pr, tasks))
@@ -517,10 +523,6 @@ defmodule SymphonyEx.GitHub.Adapter do
   end
 
   defp project_item_to_review_task_issue(_item, _opts), do: nil
-
-  defp claim_review_tasks(tasks, opts) do
-    Enum.each(tasks, &add_review_task_reaction(&1.id, @review_task_claim_reaction, opts))
-  end
 
   @spec review_task_project_item?(map(), [String.t()]) :: boolean()
   defp review_task_project_item?(item, review_task_states) do
