@@ -933,7 +933,9 @@ defmodule SymphonyEx.Orchestrator do
   ]
 
   @ignored_summary_markers [
-    "warning: exceeded skills context budget"
+    "warning: exceeded skills context budget",
+    "skills context budget",
+    "skill descriptions were shortened"
   ]
 
   @spec candidate_summary_text(term()) :: String.t() | nil

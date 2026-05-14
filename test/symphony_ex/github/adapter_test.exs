@@ -299,6 +299,10 @@ defmodule SymphonyEx.GitHub.AdapterTest do
         {:get, "https://api.github.com/repos/example/repo/pulls/3/comments"} ->
           {:ok, %Req.Response{status: 200, body: []}}
 
+        {:post, "https://api.github.com/repos/example/repo/issues/comments/1001/reactions"} ->
+          {:ok,
+           %Req.Response{status: 201, body: %{"content" => request.options[:json][:content]}}}
+
         other ->
           flunk("unexpected request: #{inspect(other)}")
       end
@@ -390,6 +394,10 @@ defmodule SymphonyEx.GitHub.AdapterTest do
                }
              ]
            }}
+
+        {:post, "https://api.github.com/repos/example/repo/issues/comments/2001/reactions"} ->
+          {:ok,
+           %Req.Response{status: 201, body: %{"content" => request.options[:json][:content]}}}
 
         other ->
           flunk("unexpected request: #{inspect(other)}")
