@@ -17,8 +17,9 @@ defmodule SymphonyEx.GitHub.Adapter do
   @status_start "<!-- symphony:status -->"
   @status_end "<!-- /symphony:status -->"
   @review_task_claim_reaction "eyes"
-  @review_task_completion_reaction "hooray"
-  @review_task_blocked_reaction "confused"
+  @review_task_running_reaction "rocket"
+  @review_task_completion_reaction "+1"
+  @review_task_blocked_reaction "-1"
 
   @spec fetch_candidate_issues(keyword()) :: {:ok, [Issue.t()]} | {:error, term()}
   def fetch_candidate_issues(opts) do
@@ -83,12 +84,11 @@ defmodule SymphonyEx.GitHub.Adapter do
 
   @spec write_run_record(Issue.t(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def write_run_record(%Issue{} = issue, attrs, opts) do
-    body = render_run_record(issue, attrs)
-    comment = managed_block(body)
-
-    with {:ok, response} <- create_comment(issue.identifier, comment, opts),
+    with {:ok, response} <- maybe_create_lifecycle_comment(issue, attrs, opts),
          {:ok, _body_response} <- update_issue_status_summary(issue, attrs, opts) do
-      emit_write_back_stage(issue, :managed_record, :success, %{status: Map.get(attrs, :status)})
+      emit_write_back_stage(issue, :lifecycle_record, :success, %{status: Map.get(attrs, :status)})
+
+      maybe_add_issue_lifecycle_reaction(issue, attrs, opts)
 
       case sync_write_back(issue, attrs, opts) do
         :ok ->
@@ -116,8 +116,56 @@ defmodule SymphonyEx.GitHub.Adapter do
       end
     else
       {:error, reason} ->
-        emit_write_back_stage(issue, :managed_record, :failed, %{reason: inspect(reason)})
+        emit_write_back_stage(issue, :lifecycle_record, :failed, %{reason: inspect(reason)})
         {:error, reason}
+    end
+  end
+
+  @spec maybe_create_lifecycle_comment(Issue.t(), map(), keyword()) ::
+          {:ok, map()} | {:error, term()}
+  defp maybe_create_lifecycle_comment(%Issue{} = issue, attrs, opts) do
+    write_back_opts = Keyword.get(opts, :write_back, [])
+
+    if Keyword.get(write_back_opts, :lifecycle_comments, true) do
+      body = render_run_record(issue, attrs)
+      comment = managed_block(body)
+      create_comment(issue.identifier, comment, opts)
+    else
+      {:ok, %{body: nil, skipped: :lifecycle_comment}}
+    end
+  end
+
+  @spec maybe_add_issue_lifecycle_reaction(Issue.t(), map(), keyword()) :: :ok
+  defp maybe_add_issue_lifecycle_reaction(%Issue{} = issue, attrs, opts) do
+    write_back_opts = Keyword.get(opts, :write_back, [])
+
+    with true <- Keyword.get(write_back_opts, :lifecycle_reactions, false),
+         reaction when is_binary(reaction) <- lifecycle_reaction(attrs) do
+      case Client.create_issue_reaction(issue.identifier, reaction, opts) do
+        {:ok, _response} ->
+          :ok
+
+        {:error, reason} ->
+          emit_write_back_stage(issue, :lifecycle_reaction, :partial, %{reason: inspect(reason)})
+          :ok
+      end
+    else
+      _ -> :ok
+    end
+  end
+
+  @spec lifecycle_reaction(map()) :: String.t() | nil
+  defp lifecycle_reaction(attrs) do
+    status = Map.get(attrs, :status)
+    result = Map.get(attrs, :result)
+
+    cond do
+      status == :claimed -> "eyes"
+      status == :running -> "rocket"
+      status == :released and result == :success -> "+1"
+      status == :released and result in [:failed, :cancelled] -> "-1"
+      status == :retry_queued -> "-1"
+      true -> nil
     end
   end
 
@@ -405,6 +453,9 @@ defmodule SymphonyEx.GitHub.Adapter do
         status == :claimed ->
           @review_task_claim_reaction
 
+        status == :running ->
+          @review_task_running_reaction
+
         status == :released and result == :success ->
           @review_task_completion_reaction
 
@@ -636,7 +687,10 @@ defmodule SymphonyEx.GitHub.Adapter do
       [
         @review_task_completion_reaction,
         @review_task_claim_reaction,
-        @review_task_blocked_reaction
+        @review_task_running_reaction,
+        @review_task_blocked_reaction,
+        "hooray",
+        "confused"
       ],
       &(reaction_count(reactions, &1) > 0)
     )

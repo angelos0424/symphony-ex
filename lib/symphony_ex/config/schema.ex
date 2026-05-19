@@ -76,6 +76,8 @@ defmodule SymphonyEx.Config.Schema do
                   default: [],
                   keys: [
                     enabled: [type: :boolean, default: true],
+                    lifecycle_comments: [type: :boolean, default: true],
+                    lifecycle_reactions: [type: :boolean, default: false],
                     in_progress_state_names: [type: {:list, :string}, default: ["In Progress"]],
                     review_state_names: [type: {:list, :string}, default: ["In Review"]],
                     labels: [type: {:list, :string}, default: []],

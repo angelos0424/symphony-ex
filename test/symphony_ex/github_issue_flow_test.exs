@@ -463,9 +463,12 @@ defmodule SymphonyEx.GitHubIssueFlowTest do
              "eyes",
              "eyes",
              "eyes",
-             "hooray",
-             "hooray",
-             "hooray"
+             "rocket",
+             "rocket",
+             "rocket",
+             "+1",
+             "+1",
+             "+1"
            ]
 
     assert Enum.any?(
@@ -541,7 +544,7 @@ defmodule SymphonyEx.GitHubIssueFlowTest do
         "user" => %{"login" => "reviewer"},
         "body" => "@Task\n리뷰 문서의 실행 방법을 보완해줘.",
         "html_url" => "https://github.com/example/repo/issues/12#issuecomment-1001",
-        "reactions" => %{"hooray" => 1, "total_count" => 1}
+        "reactions" => %{"+1" => 1, "total_count" => 1}
       }
     ])
 
@@ -603,7 +606,7 @@ defmodule SymphonyEx.GitHubIssueFlowTest do
         "user" => %{"login" => "reviewer"},
         "body" => "@Task\n막힌 작업을 다시 봐줘.",
         "html_url" => "https://github.com/example/repo/issues/12#issuecomment-1002",
-        "reactions" => %{"confused" => 1, "total_count" => 1}
+        "reactions" => %{"-1" => 1, "total_count" => 1}
       }
     ])
 
@@ -693,7 +696,7 @@ defmodule SymphonyEx.GitHubIssueFlowTest do
 
     control = Control.snapshot()
     assert control.project_status == "In Review"
-    assert Enum.map(control.comment_reactions, & &1.content) == ["eyes", "confused"]
+    assert Enum.map(control.comment_reactions, & &1.content) == ["eyes", "rocket", "-1"]
   end
 
   test "skips ambiguous issues with a visible missing metadata reason" do

@@ -620,6 +620,115 @@ defmodule SymphonyEx.GitHub.AdapterTest do
     assert body =~ "<!-- symphony:managed -->"
   end
 
+  test "write_run_record can use issue lifecycle reactions instead of managed comments" do
+    issue = %Issue{
+      id: "I_kwDOA1",
+      identifier: "12",
+      title: "Title",
+      description: "",
+      state: "Open"
+    }
+
+    request_fun = fn request ->
+      assert request.method == :post
+      assert String.ends_with?(to_string(request.url), "/repos/example/repo/issues/12/reactions")
+      assert request.options[:json][:content] == "rocket"
+      {:ok, %Req.Response{status: 201, body: Map.new(request.options[:json])}}
+    end
+
+    opts = [
+      api_key: "gh-token",
+      owner: "example",
+      repo: "repo",
+      write_back: [lifecycle_comments: false, lifecycle_reactions: true],
+      request_fun: request_fun
+    ]
+
+    assert {:ok, %{skipped: :lifecycle_comment}} =
+             Adapter.write_run_record(issue, %{status: :running, attempt: 1}, opts)
+  end
+
+  test "write_run_record maps released lifecycle reactions to +1 and -1" do
+    issue = %Issue{
+      id: "I_kwDOA1",
+      identifier: "12",
+      title: "Title",
+      description: "Original",
+      state: "Open"
+    }
+
+    parent = self()
+
+    request_fun = fn request ->
+      send(parent, {:github_request, request})
+
+      cond do
+        request.method == :post and
+            String.ends_with?(to_string(request.url), "/repos/example/repo/issues/12/reactions") ->
+          {:ok, %Req.Response{status: 201, body: Map.new(request.options[:json])}}
+
+        request.method == :get and
+            String.ends_with?(to_string(request.url), "/repos/example/repo/issues/12") ->
+          {:ok, %Req.Response{status: 200, body: %{"body" => "Original"}}}
+
+        request.method == :get and
+            String.ends_with?(to_string(request.url), "/repos/example/repo/pulls") ->
+          {:ok, %Req.Response{status: 200, body: []}}
+
+        request.method == :patch and
+            String.ends_with?(to_string(request.url), "/repos/example/repo/issues/12") ->
+          {:ok, %Req.Response{status: 200, body: Map.new(request.options[:json])}}
+
+        true ->
+          flunk("unexpected request: #{inspect(request)}")
+      end
+    end
+
+    opts = [
+      api_key: "gh-token",
+      owner: "example",
+      repo: "repo",
+      write_back: [lifecycle_comments: false, lifecycle_reactions: true],
+      request_fun: request_fun
+    ]
+
+    assert {:ok, _} =
+             Adapter.write_run_record(
+               issue,
+               %{status: :released, attempt: 1, result: :success},
+               opts
+             )
+
+    success_requests = collect_requests(4)
+
+    assert Enum.any?(success_requests, fn request ->
+             request.method == :post and
+               String.ends_with?(
+                 to_string(request.url),
+                 "/repos/example/repo/issues/12/reactions"
+               ) and
+               request.options[:json][:content] == "+1"
+           end)
+
+    assert {:ok, _} =
+             Adapter.write_run_record(
+               issue,
+               %{status: :released, attempt: 2, result: :failed},
+               opts
+             )
+
+    requests = collect_requests(3)
+
+    assert Enum.any?(requests, fn request ->
+             request.method == :post and
+               String.ends_with?(
+                 to_string(request.url),
+                 "/repos/example/repo/issues/12/reactions"
+               ) and
+               request.options[:json][:content] == "-1"
+           end)
+  end
+
   test "write_run_record updates issue body summary with PR number and keeps PR URL in metadata" do
     issue = %Issue{
       id: "I_kwDOA1",
@@ -1945,7 +2054,7 @@ defmodule SymphonyEx.GitHub.AdapterTest do
              Adapter.write_run_record(issue, %{status: :running, attempt: 1}, opts)
 
     assert_receive {:telemetry_event, [:symphony_ex, :write_back, :stage], _measurements,
-                    %{stage: :managed_record, outcome: :success, tracker_kind: :github}}
+                    %{stage: :lifecycle_record, outcome: :success, tracker_kind: :github}}
 
     assert_receive {:telemetry_event, [:symphony_ex, :write_back, :stage], _measurements,
                     %{stage: :essential, outcome: :success, tracker_kind: :github}}
@@ -2060,7 +2169,7 @@ defmodule SymphonyEx.GitHub.AdapterTest do
              Adapter.write_run_record(issue, %{status: :running, attempt: 1}, opts)
 
     assert_receive {:telemetry_event, [:symphony_ex, :write_back, :stage], _measurements,
-                    %{stage: :managed_record, outcome: :success, tracker_kind: :github}}
+                    %{stage: :lifecycle_record, outcome: :success, tracker_kind: :github}}
 
     assert_receive {:telemetry_event, [:symphony_ex, :write_back, :stage], _measurements,
                     %{stage: :essential, outcome: :success, tracker_kind: :github}}

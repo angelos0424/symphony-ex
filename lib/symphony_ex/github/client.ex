@@ -91,6 +91,18 @@ defmodule SymphonyEx.GitHub.Client do
     )
   end
 
+  @spec create_issue_reaction(String.t() | pos_integer(), String.t(), keyword()) ::
+          {:ok, map()} | {:error, term()}
+  def create_issue_reaction(number_or_identifier, content, opts) do
+    owner = Keyword.fetch!(opts, :owner)
+    repo = Keyword.fetch!(opts, :repo)
+    issue_number = normalize_issue_number(number_or_identifier)
+
+    rest(:post, "/repos/#{owner}/#{repo}/issues/#{issue_number}/reactions", opts,
+      json: %{content: content}
+    )
+  end
+
   @spec create_issue_comment_reaction(pos_integer(), String.t(), keyword()) ::
           {:ok, map()} | {:error, term()}
   def create_issue_comment_reaction(comment_id, content, opts) when is_integer(comment_id) do

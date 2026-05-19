@@ -13,6 +13,8 @@ tracker:
   required-metadata-fields: []
   write-back:
     enabled: true
+    lifecycle-comments: false
+    lifecycle-reactions: true
 workspace:
   root: /srv/symphony/repo-a/worktrees
   source-cache-root: /srv/symphony/repo-a/source-cache
