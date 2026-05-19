@@ -5,10 +5,10 @@ tracker:
   repo: activities
   project-number: 5
   active-states:
-    - Ready
-    - In progress
+    - Todo
+    - In Progress
   terminal-states:
-    - In review
+    - In Review
     - Done
   required-metadata-fields: []
   write-back:

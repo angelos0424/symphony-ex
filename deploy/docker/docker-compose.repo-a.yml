@@ -15,7 +15,7 @@ services:
       SYMPHONY_WORKFLOW_PATH: /app/workflows/repo-a.WORKFLOW.md
       SYMPHONY_DASHBOARD_ENABLED: "false"
     volumes:
-      - ${SYMPHONY_SSH_DIR}:/root/.ssh:ro
+      - ${HOME}/.codex:/run/host-codex:ro
       - ./workflows/repo-a.WORKFLOW.md:/app/workflows/repo-a.WORKFLOW.md:ro
       - repo_a_worktrees:/srv/symphony/repo-a/worktrees
       - repo_a_source_cache:/srv/symphony/repo-a/source-cache
