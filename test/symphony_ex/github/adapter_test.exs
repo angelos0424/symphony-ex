@@ -106,8 +106,22 @@ defmodule SymphonyEx.GitHub.AdapterTest do
     assert issue.labels == ["backend", "elixir"]
     assert issue.assignees == []
     assert issue.conflict_hints == []
+    assert issue.missing_required_fields == [:service, :paths]
     assert issue.state == "Open"
     assert issue.url == "https://github.com/example/repo/issues/12"
+  end
+
+  test "uses tracker-required metadata fields when mapping GitHub issue payloads" do
+    payload = %{
+      "id" => 101,
+      "number" => 12,
+      "title" => "Capture idea",
+      "body" => "## 아이디어\n필요한 기능을 정리한다.",
+      "state" => "open"
+    }
+
+    assert %Issue{} = issue = Adapter.to_issue(payload, required_metadata_fields: [])
+    assert issue.missing_required_fields == []
   end
 
   test "extracts assignees, conflict hints, and explicit branch metadata from GitHub issue payloads" do

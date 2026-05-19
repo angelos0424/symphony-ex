@@ -123,7 +123,12 @@ defmodule SymphonyEx.GitHub.Adapter do
 
   @spec to_issue(map(), keyword()) :: Issue.t()
   def to_issue(issue, opts \\ []) do
-    metadata = IssueBodyMetadata.parse(issue["body"] || "")
+    metadata =
+      IssueBodyMetadata.parse(
+        issue["body"] || "",
+        Keyword.get(opts, :required_metadata_fields, [:service, :paths])
+      )
+
     target_pr = metadata.target_pr
     target_branch = metadata.target_branch || resolve_target_branch_from_pr(target_pr, opts)
 

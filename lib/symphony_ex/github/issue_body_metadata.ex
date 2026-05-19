@@ -54,13 +54,15 @@ defmodule SymphonyEx.GitHub.IssueBodyMetadata do
     "release" => "release:"
   }
 
-  @spec parse(String.t() | nil) :: t()
-  def parse(body) do
+  @default_required_fields [:service, :paths]
+
+  @spec parse(String.t() | nil, [atom()]) :: t()
+  def parse(body, required_fields \\ @default_required_fields) do
     body
     |> to_string()
     |> String.split("\n")
     |> Enum.reduce(%__MODULE__{}, &parse_line/2)
-    |> finalize()
+    |> finalize(required_fields)
   end
 
   @spec parse_line(String.t(), t()) :: t()
@@ -128,15 +130,24 @@ defmodule SymphonyEx.GitHub.IssueBodyMetadata do
     %{metadata | conflict_hints: Enum.uniq(metadata.conflict_hints ++ conflict_hints)}
   end
 
-  @spec finalize(t()) :: t()
-  defp finalize(metadata) do
+  @spec finalize(t(), [atom()]) :: t()
+  defp finalize(metadata, required_fields) do
     missing_required_fields =
       []
-      |> maybe_mark_missing(:service, blank?(metadata.service))
-      |> maybe_mark_missing(:paths, metadata.paths == [])
+      |> maybe_mark_missing(
+        :service,
+        required_field?(required_fields, :service) and blank?(metadata.service)
+      )
+      |> maybe_mark_missing(
+        :paths,
+        required_field?(required_fields, :paths) and metadata.paths == []
+      )
 
     %{metadata | missing_required_fields: missing_required_fields}
   end
+
+  @spec required_field?([atom()], atom()) :: boolean()
+  defp required_field?(required_fields, field), do: field in required_fields
 
   @spec maybe_mark_missing([atom()], atom(), boolean()) :: [atom()]
   defp maybe_mark_missing(fields, _field, false), do: fields

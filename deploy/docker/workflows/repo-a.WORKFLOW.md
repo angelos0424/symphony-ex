@@ -2,14 +2,15 @@
 tracker:
   kind: github
   owner: angelos0424
-  repo: holywords
-  project-number: 3
+  repo: activities
+  project-number: 5
   active-states:
-    - Todo
-    - In Progress
+    - Ready
+    - In progress
   terminal-states:
-    - In Review
+    - In review
     - Done
+  required-metadata-fields: []
   write-back:
     enabled: true
 workspace:

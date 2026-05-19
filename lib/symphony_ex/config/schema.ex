@@ -70,6 +70,7 @@ defmodule SymphonyEx.Config.Schema do
                 project_number: [type: :pos_integer],
                 active_states: [type: {:list, :string}, default: ["In Progress", "Todo"]],
                 terminal_states: [type: {:list, :string}, default: ["Done", "Canceled"]],
+                required_metadata_fields: [type: {:list, :atom}, default: [:service, :paths]],
                 write_back: [
                   type: :keyword_list,
                   default: [],

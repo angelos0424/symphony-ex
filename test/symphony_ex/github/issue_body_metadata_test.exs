@@ -32,6 +32,14 @@ defmodule SymphonyEx.GitHub.IssueBodyMetadataTest do
     assert IssueBodyMetadata.parse("Service: api").missing_required_fields == [:paths]
   end
 
+  test "allows workflows to disable required metadata fields" do
+    metadata = IssueBodyMetadata.parse("## 작업 내용\n아이디어 정리", [])
+
+    assert metadata.service == nil
+    assert metadata.paths == []
+    assert metadata.missing_required_fields == []
+  end
+
   test "parses optional target branch and target pr metadata aliases" do
     body = """
     Service: API
