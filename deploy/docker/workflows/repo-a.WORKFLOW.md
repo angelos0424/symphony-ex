@@ -72,7 +72,7 @@ Rules:
 - `[todo]` issues may only change `todo/**` by default.
 - Do not modify another service folder while solving the current issue.
 - Do not create cross-service abstractions unless the issue explicitly asks for it.
-- If a shared/root file must be changed, explain why in the PR body and final summary.
+- If a shared/root file must be changed, explain why in the PR body and the 'what changed' section of the final summary.
 - If the issue title has no valid service prefix, stop and report the blocker clearly.
 
 Examples:
