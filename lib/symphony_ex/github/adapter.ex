@@ -519,30 +519,94 @@ defmodule SymphonyEx.GitHub.Adapter do
     review_task_states = Keyword.get(opts, :review_task_states, ["In Review"])
     identifiers = Keyword.get(opts, :include_issue_identifiers, [])
 
-    with {:ok, items} <- Client.list_project_items(Keyword.put(opts, :include_issue_body, true)) do
+    with {:ok, items} <- Client.list_project_items(Keyword.put(opts, :include_issue_body, false)),
+         {:ok, issues} <-
+           items
+           |> Enum.filter(
+             &(active_project_item?(&1, active_states) or
+                 review_task_project_item?(&1, review_task_states))
+           )
+           |> hydrate_project_candidate_items(opts)
+           |> project_candidate_items_to_issues(active_states, review_task_states, opts) do
       issues =
-        items
-        |> Enum.reduce([], fn item, acc ->
-          cond do
-            active_project_item?(item, active_states) ->
-              [project_item_to_issue(item, opts) | acc]
-
-            review_task_project_item?(item, review_task_states) ->
-              case project_item_to_review_task_issue(item, opts) do
-                nil -> acc
-                issue -> [issue | acc]
-              end
-
-            true ->
-              acc
-          end
-        end)
+        issues
         |> Enum.reject(&is_nil/1)
-        |> Enum.reverse()
         |> maybe_filter_issue_identifiers(identifiers)
 
       {:ok, issues}
     end
+  end
+
+  @spec hydrate_project_candidate_items([map()], keyword()) :: {:ok, [map()]} | {:error, term()}
+  defp hydrate_project_candidate_items(items, opts) do
+    Enum.reduce_while(items, {:ok, []}, fn item, {:ok, acc} ->
+      case hydrate_project_candidate_item(item, opts) do
+        {:ok, nil} -> {:cont, {:ok, acc}}
+        {:ok, hydrated_item} -> {:cont, {:ok, [hydrated_item | acc]}}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, hydrated_items} -> {:ok, Enum.reverse(hydrated_items)}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  @spec hydrate_project_candidate_item(map(), keyword()) :: {:ok, map() | nil} | {:error, term()}
+  defp hydrate_project_candidate_item(%{"content" => %{"number" => number} = issue} = item, opts) do
+    if is_binary(issue["body"]) do
+      {:ok, item}
+    else
+      case Client.fetch_issue(number, opts) do
+        {:ok, nil} ->
+          {:ok, nil}
+
+        {:ok, fetched_issue} ->
+          {:ok, Map.put(item, "content", Map.merge(issue, fetched_issue))}
+
+        {:error, _reason} = error ->
+          error
+      end
+    end
+  end
+
+  defp hydrate_project_candidate_item(_item, _opts), do: {:ok, nil}
+
+  @spec project_candidate_items_to_issues(
+          {:ok, [map()]} | {:error, term()},
+          [String.t()],
+          [String.t()],
+          keyword()
+        ) ::
+          {:ok, [Issue.t() | nil]} | {:error, term()}
+  defp project_candidate_items_to_issues(
+         {:error, _reason} = error,
+         _active_states,
+         _review_task_states,
+         _opts
+       ),
+       do: error
+
+  defp project_candidate_items_to_issues({:ok, items}, active_states, review_task_states, opts) do
+    issues =
+      Enum.reduce(items, [], fn item, acc ->
+        cond do
+          active_project_item?(item, active_states) ->
+            [project_item_to_issue(item, opts) | acc]
+
+          review_task_project_item?(item, review_task_states) ->
+            case project_item_to_review_task_issue(item, opts) do
+              nil -> acc
+              issue -> [issue | acc]
+            end
+
+          true ->
+            acc
+        end
+      end)
+      |> Enum.reverse()
+
+    {:ok, issues}
   end
 
   @spec project_item_to_issue(map(), keyword()) :: Issue.t() | nil
@@ -585,7 +649,8 @@ defmodule SymphonyEx.GitHub.Adapter do
     status = project_item_status(item)
     issue = Map.get(item, "content", %{})
 
-    is_map(issue) and is_integer(issue["number"]) and status in review_task_states
+    is_map(issue) and is_integer(issue["number"]) and issue_open?(issue) and
+      status in review_task_states
   end
 
   @spec active_project_item?(map(), [String.t()]) :: boolean()
@@ -593,8 +658,17 @@ defmodule SymphonyEx.GitHub.Adapter do
     status = project_item_status(item)
     issue = Map.get(item, "content", %{})
 
-    is_map(issue) and is_integer(issue["number"]) and status in active_states and
+    is_map(issue) and is_integer(issue["number"]) and issue_open?(issue) and
+      status in active_states and
       not rerun_blocked_item?(item)
+  end
+
+  @spec issue_open?(map()) :: boolean()
+  defp issue_open?(issue) do
+    case issue["state"] do
+      value when is_binary(value) -> String.upcase(value) == "OPEN"
+      _ -> is_nil(issue["closed_at"])
+    end
   end
 
   @spec rerun_blocked_item?(map()) :: boolean()

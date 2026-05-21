@@ -241,6 +241,118 @@ defmodule SymphonyEx.GitHub.AdapterTest do
     assert issue.url == "https://github.com/example/repo/issues/12"
   end
 
+  test "fetches project item bodies only after status filtering and skips closed active items" do
+    request_fun = fn request ->
+      case {request.method, to_string(request.url)} do
+        {:post, "https://api.github.com/graphql"} ->
+          refute String.contains?(request.options[:json]["query"], "\n                  body\n")
+
+          {:ok,
+           %Req.Response{
+             status: 200,
+             body: %{
+               "data" => %{
+                 "organization" => %{
+                   "projectV2" => %{
+                     "id" => "PVT_123",
+                     "items" => %{
+                       "nodes" => [
+                         %{
+                           "id" => "PVTI_active",
+                           "content" => %{
+                             "id" => "I_12",
+                             "number" => 12,
+                             "title" => "Active task",
+                             "url" => "https://github.com/example/repo/issues/12",
+                             "state" => "OPEN"
+                           },
+                           "fieldValues" => %{
+                             "nodes" => [
+                               %{
+                                 "name" => "Todo",
+                                 "field" => %{"id" => "status-field", "name" => "Status"}
+                               }
+                             ]
+                           }
+                         },
+                         %{
+                           "id" => "PVTI_ready",
+                           "content" => %{
+                             "id" => "I_13",
+                             "number" => 13,
+                             "title" => "Ready task",
+                             "url" => "https://github.com/example/repo/issues/13",
+                             "state" => "OPEN"
+                           },
+                           "fieldValues" => %{
+                             "nodes" => [
+                               %{
+                                 "name" => "Ready",
+                                 "field" => %{"id" => "status-field", "name" => "Status"}
+                               }
+                             ]
+                           }
+                         },
+                         %{
+                           "id" => "PVTI_closed_todo",
+                           "content" => %{
+                             "id" => "I_14",
+                             "number" => 14,
+                             "title" => "Closed but Todo",
+                             "url" => "https://github.com/example/repo/issues/14",
+                             "state" => "CLOSED"
+                           },
+                           "fieldValues" => %{
+                             "nodes" => [
+                               %{
+                                 "name" => "Todo",
+                                 "field" => %{"id" => "status-field", "name" => "Status"}
+                               }
+                             ]
+                           }
+                         }
+                       ]
+                     }
+                   }
+                 },
+                 "user" => nil
+               }
+             }
+           }}
+
+        {:get, "https://api.github.com/repos/example/repo/issues/12"} ->
+          {:ok,
+           %Req.Response{
+             status: 200,
+             body: %{
+               "id" => "I_12",
+               "number" => 12,
+               "title" => "Active task",
+               "body" => "Service: docs\nPaths: docs/task.md\n",
+               "html_url" => "https://github.com/example/repo/issues/12",
+               "state" => "open"
+             }
+           }}
+
+        other ->
+          flunk("unexpected request: #{inspect(other)}")
+      end
+    end
+
+    opts = [
+      api_key: "gh-token",
+      owner: "example",
+      repo: "repo",
+      project_number: 7,
+      active_states: ["Todo", "In Progress"],
+      request_fun: request_fun
+    ]
+
+    assert {:ok, [issue]} = Adapter.fetch_candidate_issues(opts)
+    assert issue.identifier == "12"
+    assert issue.description =~ "Service: docs"
+  end
+
   test "includes In Review issues with unprocessed @Task comments as review follow-up candidates" do
     request_fun = fn request ->
       case {request.method, to_string(request.url)} do
