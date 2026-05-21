@@ -234,6 +234,7 @@ defmodule SymphonyEx.GitHub.ClientTest do
       api_key: "gh-token",
       owner: "example-org",
       project_number: 7,
+      project_item_query: "is:open status:\"Todo\"",
       request_fun: &GitHubClientStub.request/1
     ]
 
@@ -244,7 +245,14 @@ defmodule SymphonyEx.GitHub.ClientTest do
     assert_received {:github_request, request}
     assert to_string(request.url) == "https://api.github.com/graphql"
     assert request.method == :post
-    assert request.options[:json]["variables"] == %{"owner" => "example-org", "number" => 7}
+
+    assert request.options[:json]["variables"] == %{
+             "owner" => "example-org",
+             "number" => 7,
+             "query" => "is:open status:\"Todo\""
+           }
+
+    assert request.options[:json]["query"] =~ "items(first: 100, query: $query)"
   end
 
   test "lists user-owned project items when organization lookup returns a benign partial error" do
