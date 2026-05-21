@@ -197,6 +197,10 @@ defmodule SymphonyEx.ConfigTest do
           sns: 1
           recipe: 1
           todo: 1
+        "$reviewbot":
+          actors:
+            - gemini-code-assist
+            - coderabbitai
         full-auto:
           apply-review-feedback: true
           auto-merge: true
@@ -226,6 +230,13 @@ defmodule SymphonyEx.ConfigTest do
         assert automation[:mode] == :night_worker
         assert automation[:services] == ["sns", "recipe", "todo"]
         assert automation[:service_concurrency] == %{"sns" => 1, "recipe" => 1, "todo" => 1}
+        assert automation[:reviewbot][:actors] == ["gemini-code-assist", "coderabbitai"]
+
+        assert MapSet.equal?(
+                 automation[:reviewbot][:actors_set],
+                 MapSet.new(["gemini-code-assist", "coderabbitai"])
+               )
+
         assert automation[:full_auto][:apply_review_feedback]
         assert automation[:full_auto][:auto_merge]
         assert automation[:full_auto][:promote_next_ready_to_todo]

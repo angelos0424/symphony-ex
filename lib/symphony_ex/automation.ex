@@ -22,6 +22,10 @@ defmodule SymphonyEx.Automation do
     mode: :default,
     services: [],
     service_concurrency: %{},
+    reviewbot: [
+      actors: [],
+      actors_set: MapSet.new()
+    ],
     full_auto: [
       apply_review_feedback: false,
       auto_merge: false,
@@ -55,6 +59,7 @@ defmodule SymphonyEx.Automation do
     |> Keyword.put(:services, services)
     |> Keyword.put(:services_set, MapSet.new(services))
     |> Keyword.put(:service_concurrency, service_concurrency)
+    |> Keyword.update(:reviewbot, @default[:reviewbot], &normalize_reviewbot/1)
     |> Keyword.update(:night_worker, @default[:night_worker], &normalize_night_worker/1)
   end
 
@@ -79,6 +84,7 @@ defmodule SymphonyEx.Automation do
     end
 
     validate_service_concurrency!(config)
+    validate_reviewbot!(Keyword.get(config, :reviewbot, []))
     validate_night_worker!(Keyword.get(config, :night_worker, []))
     config
   end
@@ -167,6 +173,57 @@ defmodule SymphonyEx.Automation do
   defp normalize_service_name(service),
     do: service |> to_string() |> String.trim() |> String.downcase()
 
+  defp normalize_reviewbot(opts) when is_list(opts) do
+    opts =
+      cond do
+        Keyword.keyword?(opts) -> Keyword.merge(@default[:reviewbot], opts)
+        true -> Keyword.put(@default[:reviewbot], :actors, opts)
+      end
+
+    actors =
+      opts
+      |> Keyword.get(:actors, Keyword.get(opts, :actor_logins, Keyword.get(opts, :logins, [])))
+      |> normalize_reviewbot_actors()
+
+    opts
+    |> Keyword.put(:actors, actors)
+    |> Keyword.put(:actors_set, MapSet.new(actors))
+  end
+
+  defp normalize_reviewbot(%{} = opts) do
+    opts
+    |> Enum.map(fn {key, value} -> {normalize_reviewbot_key(key), value} end)
+    |> normalize_reviewbot()
+  end
+
+  defp normalize_reviewbot(actor) when is_binary(actor), do: normalize_reviewbot([actor])
+  defp normalize_reviewbot(_opts), do: @default[:reviewbot]
+
+  defp normalize_reviewbot_key(key) when key in [:actors, :actor_logins, :logins], do: key
+
+  defp normalize_reviewbot_key(key) when is_binary(key) do
+    case key |> String.trim() |> String.replace("-", "_") do
+      "actors" -> :actors
+      "actor_logins" -> :actor_logins
+      "logins" -> :logins
+      _other -> :actors
+    end
+  end
+
+  defp normalize_reviewbot_key(_key), do: :actors
+
+  defp normalize_reviewbot_actors(actors) when is_list(actors) do
+    actors
+    |> Enum.map(&normalize_actor_login/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.uniq()
+  end
+
+  defp normalize_reviewbot_actors(actor), do: normalize_reviewbot_actors([actor])
+
+  defp normalize_actor_login(actor),
+    do: actor |> to_string() |> String.trim() |> String.downcase()
+
   defp normalize_night_worker(opts) do
     opts = Keyword.merge(@default[:night_worker], opts)
 
@@ -195,6 +252,16 @@ defmodule SymphonyEx.Automation do
           :ok
       end
     end)
+  end
+
+  defp validate_reviewbot!(opts) do
+    actors = Keyword.get(opts, :actors, [])
+    duplicates = duplicates(actors)
+
+    if duplicates != [] do
+      raise ArgumentError,
+            "automation.reviewbot.actors contains duplicate actor logins: #{Enum.join(duplicates, ", ")}"
+    end
   end
 
   defp validate_night_worker!(opts) do

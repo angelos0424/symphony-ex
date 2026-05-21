@@ -129,10 +129,14 @@ defmodule SymphonyEx.Orchestrator do
         nil -> Lifecycle.default()
       end
 
+    automation = automation_config(opts)
+
     tracker_opts =
       if Keyword.has_key?(base_tracker_opts, :lifecycle),
         do: base_tracker_opts,
         else: Keyword.put(base_tracker_opts, :lifecycle, lifecycle)
+
+    tracker_opts = Keyword.put(tracker_opts, :automation, automation)
 
     now_mono_ms = System.monotonic_time(:millisecond)
     now_system_ms = System.system_time(:millisecond)
@@ -150,7 +154,7 @@ defmodule SymphonyEx.Orchestrator do
       agent_runner: Keyword.get(opts, :agent_runner, AgentRunner),
       workflow_path: Keyword.get(opts, :workflow_path),
       codex_opts: Keyword.get(opts, :codex, []),
-      automation: automation_config(opts),
+      automation: automation,
       poll_interval_ms: poll_interval_ms,
       max_concurrent: Keyword.get(opts, :max_concurrent, 1),
       max_retries: Keyword.get(opts, :max_retries, 2),
@@ -218,11 +222,14 @@ defmodule SymphonyEx.Orchestrator do
     if Process.whereis(WorkflowStore) do
       config = WorkflowStore.get_config()
 
-      tracker_opts =
-        config |> Keyword.get(:tracker, []) |> ensure_tracker_lifecycle(state.lifecycle)
-
       orchestrator_opts = Keyword.get(config, :orchestrator, [])
       automation = Keyword.get(config, :automation, state.automation)
+
+      tracker_opts =
+        config
+        |> Keyword.get(:tracker, [])
+        |> ensure_tracker_lifecycle(state.lifecycle)
+        |> Keyword.put(:automation, automation)
 
       state
       |> Map.put(:tracker_opts, tracker_opts)

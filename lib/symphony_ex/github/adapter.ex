@@ -489,6 +489,9 @@ defmodule SymphonyEx.GitHub.Adapter do
           opts
         )
 
+      {:pr_review, _review_id} ->
+        :ok
+
       :error ->
         :ok
     end
@@ -497,7 +500,7 @@ defmodule SymphonyEx.GitHub.Adapter do
   end
 
   @spec parse_review_task_id(String.t()) ::
-          {:issue_comment | :pr_comment | :pr_review_comment, pos_integer()} | :error
+          {:issue_comment | :pr_comment | :pr_review | :pr_review_comment, pos_integer()} | :error
   defp parse_review_task_id(task_id) do
     with [source, raw_id] <- String.split(to_string(task_id), ":", parts: 2),
          {comment_id, ""} <- Integer.parse(raw_id),
@@ -510,6 +513,7 @@ defmodule SymphonyEx.GitHub.Adapter do
 
   defp review_task_source_atom("issue-comment"), do: :issue_comment
   defp review_task_source_atom("pr-comment"), do: :pr_comment
+  defp review_task_source_atom("pr-review"), do: :pr_review
   defp review_task_source_atom("pr-review-comment"), do: :pr_review_comment
   defp review_task_source_atom(_source), do: nil
 
@@ -747,20 +751,31 @@ defmodule SymphonyEx.GitHub.Adapter do
           ]
   defp fetch_unprocessed_review_tasks(issue_number, target_pr, issue_body, opts) do
     processed = processed_review_task_ids(issue_body)
+    reviewbot_actors = configured_reviewbot_actors(opts)
+
+    target_pr_sources =
+      if target_pr do
+        [
+          {:pr_comment, target_pr, fn -> Client.fetch_issue_comments(target_pr, opts) end},
+          {:pr_review_comment, target_pr,
+           fn -> Client.fetch_pull_request_review_comments(target_pr, opts) end}
+        ] ++
+          if MapSet.size(reviewbot_actors) > 0 do
+            [
+              {:pr_review, target_pr,
+               fn -> Client.fetch_pull_request_reviews(target_pr, opts) end}
+            ]
+          else
+            []
+          end
+      else
+        []
+      end
 
     sources =
       [
         {:issue_comment, issue_number, fn -> Client.fetch_issue_comments(issue_number, opts) end}
-      ] ++
-        if target_pr do
-          [
-            {:pr_comment, target_pr, fn -> Client.fetch_issue_comments(target_pr, opts) end},
-            {:pr_review_comment, target_pr,
-             fn -> Client.fetch_pull_request_review_comments(target_pr, opts) end}
-          ]
-        else
-          []
-        end
+      ] ++ target_pr_sources
 
     sources
     |> Enum.flat_map(fn {source, number, fetch_fun} ->
@@ -768,7 +783,7 @@ defmodule SymphonyEx.GitHub.Adapter do
         {:ok, comments} ->
           comments
           |> List.wrap()
-          |> Enum.map(&review_task_from_comment(source, number, &1))
+          |> Enum.map(&review_task_from_comment(source, number, &1, reviewbot_actors))
           |> Enum.reject(&is_nil/1)
 
         {:error, _reason} ->
@@ -778,26 +793,57 @@ defmodule SymphonyEx.GitHub.Adapter do
     |> Enum.reject(&MapSet.member?(processed, &1.id))
   end
 
-  @spec review_task_from_comment(atom(), pos_integer(), map()) :: map() | nil
-  defp review_task_from_comment(source, number, %{"body" => body} = comment)
+  @spec review_task_from_comment(atom(), pos_integer(), map(), MapSet.t(String.t())) ::
+          map() | nil
+  defp review_task_from_comment(source, number, %{"body" => body} = comment, reviewbot_actors)
        when is_binary(body) do
     trimmed = String.trim_leading(body)
 
-    if String.match?(trimmed, ~r/^@Task\b/i) and not review_task_comment_inactive?(comment) do
-      id = "#{review_task_source_prefix(source)}:#{comment["id"] || comment["node_id"] || number}"
+    cond do
+      review_task_comment_inactive?(comment) ->
+        nil
 
-      %{
-        id: id,
-        source: source,
-        number: number,
-        author: get_in(comment, ["user", "login"]) || "unknown",
-        url: comment["html_url"] || comment["url"],
-        body: body
-      }
+      String.match?(trimmed, ~r/^@Task\b/i) ->
+        build_review_task(source, number, comment, body)
+
+      reviewbot_feedback?(source, comment, reviewbot_actors) ->
+        body =
+          "@Task review comment\n\nReviewbot feedback from #{comment_author(comment)}:\n\n#{String.trim(body)}"
+
+        build_review_task(source, number, comment, body)
+
+      true ->
+        nil
     end
   end
 
-  defp review_task_from_comment(_source, _number, _comment), do: nil
+  defp review_task_from_comment(_source, _number, _comment, _reviewbot_actors), do: nil
+
+  defp build_review_task(source, number, comment, body) do
+    id = "#{review_task_source_prefix(source)}:#{comment["id"] || comment["node_id"] || number}"
+
+    %{
+      id: id,
+      source: source,
+      number: number,
+      author: comment_author(comment),
+      url: comment["html_url"] || comment["url"],
+      body: body
+    }
+  end
+
+  defp reviewbot_feedback?(:issue_comment, _comment, _reviewbot_actors), do: false
+
+  defp reviewbot_feedback?(source, comment, reviewbot_actors)
+       when source in [:pr_comment, :pr_review, :pr_review_comment] do
+    MapSet.size(reviewbot_actors) > 0 and
+      MapSet.member?(reviewbot_actors, comment_author(comment))
+  end
+
+  defp reviewbot_feedback?(_source, _comment, _reviewbot_actors), do: false
+
+  defp comment_author(comment),
+    do: comment |> get_in(["user", "login"]) |> to_string() |> String.downcase()
 
   @spec review_task_comment_inactive?(map()) :: boolean()
   defp review_task_comment_inactive?(comment) do
@@ -824,6 +870,7 @@ defmodule SymphonyEx.GitHub.Adapter do
 
   defp review_task_source_prefix(:issue_comment), do: "issue-comment"
   defp review_task_source_prefix(:pr_comment), do: "pr-comment"
+  defp review_task_source_prefix(:pr_review), do: "pr-review"
   defp review_task_source_prefix(:pr_review_comment), do: "pr-review-comment"
 
   @spec processed_review_task_ids(String.t()) :: MapSet.t(String.t())
@@ -940,6 +987,20 @@ defmodule SymphonyEx.GitHub.Adapter do
       ]
     else
       rules
+    end
+  end
+
+  @spec configured_reviewbot_actors(keyword()) :: MapSet.t(String.t())
+  defp configured_reviewbot_actors(opts) do
+    automation = Keyword.get(opts, :automation, [])
+    active_mode = SymphonyEx.Automation.resolve_mode(automation)
+    full_auto = Keyword.get(automation, :full_auto, [])
+    reviewbot = Keyword.get(automation, :reviewbot, [])
+
+    if active_mode == :full_auto and Keyword.get(full_auto, :apply_review_feedback, false) do
+      Keyword.get(reviewbot, :actors_set, MapSet.new(Keyword.get(reviewbot, :actors, [])))
+    else
+      MapSet.new()
     end
   end
 
