@@ -43,6 +43,7 @@ defmodule SymphonyEx do
     workspace_opts = Keyword.fetch!(config, :workspace)
     codex_opts = Keyword.get(config, :codex, [])
     orchestrator_opts = Keyword.get(config, :orchestrator, [])
+    automation_opts = Keyword.get(config, :automation, SymphonyEx.Automation.default_config())
 
     [
       tracker: tracker_module(Keyword.get(tracker_opts, :kind, :github)),
@@ -50,6 +51,7 @@ defmodule SymphonyEx do
       workspace_opts: workspace_opts,
       workflow_path: workflow_path,
       codex: codex_opts,
+      automation: automation_opts,
       issue_identifier: Keyword.get(orchestrator_opts, :issue_identifier),
       poll_interval_ms: Keyword.get(orchestrator_opts, :poll_interval_ms),
       max_concurrent: Keyword.get(orchestrator_opts, :max_concurrent),

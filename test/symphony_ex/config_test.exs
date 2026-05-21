@@ -184,6 +184,119 @@ defmodule SymphonyEx.ConfigTest do
       end)
     end
 
+    test "parses automation config with service concurrency and night-worker windows" do
+      workflow = """
+      ---
+      automation:
+        mode: night-worker
+        services:
+          - sns
+          - recipe
+          - todo
+        service-concurrency:
+          sns: 1
+          recipe: 1
+          todo: 1
+        full-auto:
+          apply-review-feedback: true
+          auto-merge: true
+          promote-next-ready-to-todo: true
+        night-worker:
+          timezone: Asia/Seoul
+          windows:
+            - start: "23:00"
+              end: "07:00"
+          mode-during-window: full-auto
+          mode-outside-window: default
+      tracker:
+        owner: openai
+        repo: symphony
+      workspace:
+        root: /tmp/worktrees
+        source_repo_path: /tmp/source
+      ---
+      """
+
+      path = write_workflow!(workflow)
+
+      with_env([{"GITHUB_TOKEN", "ghs_test"}], fn ->
+        config = Config.load!(path)
+        automation = config[:automation]
+
+        assert automation[:mode] == :night_worker
+        assert automation[:services] == ["sns", "recipe", "todo"]
+        assert automation[:service_concurrency] == %{"sns" => 1, "recipe" => 1, "todo" => 1}
+        assert automation[:full_auto][:apply_review_feedback]
+        assert automation[:full_auto][:auto_merge]
+        assert automation[:full_auto][:promote_next_ready_to_todo]
+        assert automation[:night_worker][:timezone] == "Asia/Seoul"
+        assert automation[:night_worker][:mode_during_window] == :full_auto
+        assert automation[:night_worker][:mode_outside_window] == :default
+      end)
+    end
+
+    test "rejects invalid automation combinations with clear errors" do
+      duplicate_services =
+        write_workflow!("""
+        ---
+        automation:
+          services: [sns, sns]
+        tracker:
+          owner: openai
+          repo: symphony
+        workspace:
+          root: /tmp/worktrees
+          source_repo_path: /tmp/source
+        ---
+        """)
+
+      bad_window =
+        write_workflow!("""
+        ---
+        automation:
+          mode: night-worker
+          services: [sns]
+          night-worker:
+            windows:
+              - start: "25:00"
+                end: "07:00"
+        tracker:
+          owner: openai
+          repo: symphony
+        workspace:
+          root: /tmp/worktrees
+          source_repo_path: /tmp/source
+        ---
+        """)
+
+      unknown_service_limit =
+        write_workflow!("""
+        ---
+        automation:
+          services: [sns]
+          service-concurrency:
+            recipe: 1
+        tracker:
+          owner: openai
+          repo: symphony
+        workspace:
+          root: /tmp/worktrees
+          source_repo_path: /tmp/source
+        ---
+        """)
+
+      with_env([{"GITHUB_TOKEN", "ghs_test"}], fn ->
+        assert {:error, error} = Config.load(duplicate_services)
+        assert Exception.message(error) =~ "duplicate service names"
+
+        assert {:error, error} = Config.load(bad_window)
+        assert Exception.message(error) =~ "HH:MM"
+
+        assert {:error, error} = Config.load(unknown_service_limit)
+        assert Exception.message(error) =~ "not present in automation.services"
+      end)
+    end
+
     test "loads explicit issue identifier into orchestrator config" do
       workflow = """
       ---

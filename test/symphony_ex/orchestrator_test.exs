@@ -1199,6 +1199,69 @@ defmodule SymphonyEx.OrchestratorTest do
            ]
   end
 
+  test "automation services allow one issue per service to run concurrently" do
+    sns = issue_fixture("40", title: "SNS: add profile feed", labels: ["bug"])
+    recipe = issue_fixture("41", title: "recipe: add importer", labels: ["feature"])
+    todo = issue_fixture("42", title: "todo: reorder task list", labels: ["enhancement"])
+    second_sns = issue_fixture("43", title: "SNS: fix notifications", labels: ["bug"])
+
+    start_supervised!(
+      {Control,
+       test_pid: self(),
+       candidate_batches: [[sns, recipe, todo, second_sns]],
+       run_results: [
+         %{status: :success, events: [], error: nil},
+         %{status: :success, events: [], error: nil},
+         %{status: :success, events: [], error: nil}
+       ]}
+    )
+
+    orchestrator =
+      start_orchestrator(
+        max_concurrent: 4,
+        automation: [
+          services: ["sns", "recipe", "todo"],
+          service_concurrency: %{"sns" => 1, "recipe" => 1, "todo" => 1}
+        ]
+      )
+
+    wait_until(fn ->
+      snapshot = Orchestrator.snapshot(orchestrator)
+      map_size(snapshot.running) == 0 and length(Control.runs()) == 3
+    end)
+
+    assert Control.runs() == ["40", "41", "42"]
+
+    assert Enum.any?(Control.updates(), fn %{issue: issue, payload: payload} ->
+             issue.identifier == "43" and payload.status == :gated and
+               payload.gating_reason == :serialized_conflict
+           end)
+  end
+
+  test "gates issue labels that name services absent from automation services" do
+    issue = issue_fixture("50", labels: ["service:recipe"])
+
+    start_supervised!({Control, test_pid: self(), candidate_batches: [[issue]]})
+
+    orchestrator =
+      start_orchestrator(
+        max_concurrent: 3,
+        automation: [services: ["sns"], service_concurrency: %{"sns" => 1}]
+      )
+
+    wait_until(fn ->
+      snapshot = Orchestrator.snapshot(orchestrator)
+      map_size(snapshot.running) == 0 and Control.updates() != []
+    end)
+
+    assert Control.runs() == []
+
+    assert Enum.any?(Control.updates(), fn %{issue: issue, payload: payload} ->
+             issue.identifier == "50" and payload.status == :gated and
+               payload.gating_reason == :unknown_service
+           end)
+  end
+
   test "deduplicates identical persisted run-state payloads" do
     issue = issue_fixture("IDEMP-1")
 

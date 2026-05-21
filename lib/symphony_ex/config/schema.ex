@@ -56,7 +56,56 @@ defmodule SymphonyEx.Config.Schema do
     ]
   ]
 
+  @automation_full_auto_schema [
+    type: :keyword_list,
+    default: [],
+    keys: [
+      apply_review_feedback: [type: :boolean, default: false],
+      auto_merge: [type: :boolean, default: false],
+      promote_next_ready_to_todo: [type: :boolean, default: false]
+    ]
+  ]
+
+  @automation_night_worker_schema [
+    type: :keyword_list,
+    default: [],
+    keys: [
+      timezone: [type: :string, default: "Etc/UTC"],
+      windows: [type: {:list, :any}, default: []],
+      mode_during_window: [
+        type:
+          {:or, [{:in, [:default, :full_auto]}, {:in, ["default", "full-auto", "full_auto"]}]},
+        default: :full_auto
+      ],
+      mode_outside_window: [
+        type:
+          {:or, [{:in, [:default, :full_auto]}, {:in, ["default", "full-auto", "full_auto"]}]},
+        default: :default
+      ]
+    ]
+  ]
+
   @schema NimbleOptions.new!(
+            automation: [
+              type: :keyword_list,
+              default: [],
+              keys: [
+                mode: [
+                  type:
+                    {:or,
+                     [
+                       {:in, [:default, :full_auto, :night_worker]},
+                       {:in,
+                        ["default", "full-auto", "full_auto", "night-worker", "night_worker"]}
+                     ]},
+                  default: :default
+                ],
+                services: [type: {:list, :string}, default: []],
+                service_concurrency: [type: :any, default: %{}],
+                full_auto: @automation_full_auto_schema,
+                night_worker: @automation_night_worker_schema
+              ]
+            ],
             tracker: [
               type: :keyword_list,
               required: true,
@@ -176,8 +225,20 @@ defmodule SymphonyEx.Config.Schema do
     opts = NimbleOptions.validate!(opts, @schema)
 
     opts
+    |> normalize_automation!()
     |> validate_tracker_requirements!()
     |> validate_dashboard_requirements!()
+  end
+
+  @spec normalize_automation!(keyword()) :: keyword()
+  defp normalize_automation!(opts) do
+    automation =
+      opts
+      |> Keyword.get(:automation, [])
+      |> SymphonyEx.Automation.normalize()
+      |> SymphonyEx.Automation.validate!()
+
+    Keyword.put(opts, :automation, automation)
   end
 
   @spec validate_tracker_requirements!(keyword()) :: keyword()
