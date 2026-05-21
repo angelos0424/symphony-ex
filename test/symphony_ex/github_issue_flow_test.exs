@@ -20,6 +20,9 @@ defmodule SymphonyEx.GitHubIssueFlowTest do
               ),
             blocked_by: Keyword.get(opts, :blocked_by, []),
             inbound_issue_comments: Keyword.get(opts, :inbound_issue_comments, []),
+            inbound_pr_comments: Keyword.get(opts, :inbound_pr_comments, []),
+            inbound_pr_reviews: Keyword.get(opts, :inbound_pr_reviews, []),
+            inbound_pr_review_comments: Keyword.get(opts, :inbound_pr_review_comments, []),
             run_calls: [],
             run_descriptions: [],
             issue_state_updates: [],
@@ -79,6 +82,18 @@ defmodule SymphonyEx.GitHubIssueFlowTest do
       Agent.update(__MODULE__, &Map.put(&1, :inbound_issue_comments, comments))
     end
 
+    def set_inbound_pr_comments(comments) do
+      Agent.update(__MODULE__, &Map.put(&1, :inbound_pr_comments, comments))
+    end
+
+    def set_inbound_pr_reviews(reviews) do
+      Agent.update(__MODULE__, &Map.put(&1, :inbound_pr_reviews, reviews))
+    end
+
+    def set_inbound_pr_review_comments(comments) do
+      Agent.update(__MODULE__, &Map.put(&1, :inbound_pr_review_comments, comments))
+    end
+
     defp handle_request(request, state) do
       cond do
         request.method == :get and
@@ -127,7 +142,7 @@ defmodule SymphonyEx.GitHubIssueFlowTest do
           response = %{"body" => body}
 
           {{:ok, %Req.Response{status: 200, body: response}},
-           %{state | issue_bodies: [body | state.issue_bodies]}}
+           %{state | issue_body: body, issue_bodies: [body | state.issue_bodies]}}
 
         request.method == :get and
             String.ends_with?(to_string(request.url), "/repos/example/repo/issues/12/comments") ->
@@ -135,11 +150,15 @@ defmodule SymphonyEx.GitHubIssueFlowTest do
 
         request.method == :get and
             String.ends_with?(to_string(request.url), "/repos/example/repo/issues/3/comments") ->
-          {{:ok, %Req.Response{status: 200, body: []}}, state}
+          {{:ok, %Req.Response{status: 200, body: state.inbound_pr_comments}}, state}
+
+        request.method == :get and
+            String.ends_with?(to_string(request.url), "/repos/example/repo/pulls/3/reviews") ->
+          {{:ok, %Req.Response{status: 200, body: state.inbound_pr_reviews}}, state}
 
         request.method == :get and
             String.ends_with?(to_string(request.url), "/repos/example/repo/pulls/3/comments") ->
-          {{:ok, %Req.Response{status: 200, body: []}}, state}
+          {{:ok, %Req.Response{status: 200, body: state.inbound_pr_review_comments}}, state}
 
         request.method == :post and
             String.ends_with?(to_string(request.url), "/repos/example/repo/issues/12/comments") ->
@@ -475,6 +494,226 @@ defmodule SymphonyEx.GitHubIssueFlowTest do
              control.comment_reactions,
              &String.ends_with?(&1.url, "/issues/comments/1001/reactions")
            )
+  end
+
+  test "detects configured reviewbot PR feedback as review comment follow-up in full-auto mode" do
+    Control.set_issue_body(
+      "Service: docs\nPaths: .review/2026-04-24.md\nTarget-PR: 3\nTarget-Branch: codex/review-doc\n"
+    )
+
+    Control.set_project_status("In Review")
+
+    Control.set_inbound_pr_reviews([
+      %{
+        "id" => 2001,
+        "user" => %{"login" => "gemini-code-assist"},
+        "body" => "Please add coverage for the fallback path.",
+        "html_url" => "https://github.com/example/repo/pull/3#pullrequestreview-2001"
+      }
+    ])
+
+    Control.set_inbound_pr_review_comments([
+      %{
+        "id" => 3001,
+        "user" => %{"login" => "coderabbitai"},
+        "body" => "This branch should handle nil metadata explicitly.",
+        "html_url" => "https://github.com/example/repo/pull/3#discussion_r3001"
+      },
+      %{
+        "id" => 3002,
+        "user" => %{},
+        "body" => "@Task\nCheck the fallback when the author is missing.",
+        "html_url" => "https://github.com/example/repo/pull/3#discussion_r3002"
+      }
+    ])
+
+    orchestrator =
+      start_supervised!(
+        {Orchestrator,
+         tracker: SymphonyEx.GitHub.Adapter,
+         workspace: MockWorkspace,
+         agent_runner: MockAgentRunner,
+         tracker_opts: [
+           api_key: "gh-token",
+           owner: "example",
+           repo: "repo",
+           project_number: 7,
+           active_states: ["Todo", "In Progress"],
+           review_task_states: ["In Review"],
+           terminal_states: ["Done"],
+           write_back: [in_progress_state_names: ["In Progress"]],
+           request_fun: &Control.request/1
+         ],
+         automation: [
+           mode: :full_auto,
+           full_auto: [apply_review_feedback: true],
+           reviewbot: [actors: ["gemini-code-assist", "coderabbitai"]]
+         ],
+         workspace_opts: [],
+         workflow_path: "/tmp/WORKFLOW.md",
+         codex: [],
+         poll_interval_ms: 25,
+         retry_backoff_ms: 10,
+         max_retry_backoff_ms: 10,
+         max_retries: 1,
+         max_concurrent: 1,
+         task_supervisor: SymphonyEx.IntegrationAgentWorkers}
+      )
+
+    wait_until(fn ->
+      snapshot = Orchestrator.snapshot(orchestrator)
+      Control.snapshot().run_calls == ["12"] and length(snapshot.completed) == 1
+    end)
+
+    control = Control.snapshot()
+    description = List.last(control.run_descriptions)
+
+    assert description =~ "## Review Follow-up Task"
+    assert description =~ "Reviewbot feedback from gemini-code-assist"
+    assert description =~ "Reviewbot feedback from coderabbitai"
+    assert description =~ "### pr-review-comment:3002 by unknown"
+    assert description =~ "Check the fallback when the author is missing."
+    assert description =~ "`@Task review comment`: inspect the review comments"
+
+    assert Enum.any?(
+             control.issue_bodies,
+             &String.contains?(&1, "processed_task: pr-review:2001 status: success")
+           )
+
+    assert Enum.any?(
+             control.issue_bodies,
+             &String.contains?(&1, "processed_task: pr-review-comment:3001 status: success")
+           )
+
+    assert Enum.any?(
+             control.issue_bodies,
+             &String.contains?(&1, "processed_task: pr-review-comment:3002 status: success")
+           )
+  end
+
+  test "skips processed and non-reviewbot PR feedback" do
+    Control.set_issue_body(
+      "Service: docs\nPaths: .review/2026-04-24.md\nTarget-PR: 3\nTarget-Branch: codex/review-doc\n\n<!-- symphony:review-tasks -->\nprocessed_task: pr-review-comment:3001 status: success\n<!-- /symphony:review-tasks -->\n"
+    )
+
+    Control.set_project_status("In Review")
+
+    Control.set_inbound_pr_review_comments([
+      %{
+        "id" => 3001,
+        "user" => %{"login" => "gemini-code-assist"},
+        "body" => "Already handled feedback.",
+        "html_url" => "https://github.com/example/repo/pull/3#discussion_r3001"
+      },
+      %{
+        "id" => 3002,
+        "user" => %{"login" => "human-reviewer"},
+        "body" => "Visible but not configured as reviewbot and not @Task.",
+        "html_url" => "https://github.com/example/repo/pull/3#discussion_r3002"
+      },
+      %{
+        "id" => 3003,
+        "user" => %{"login" => "gemini-code-assist"},
+        "body" => "  \n\t  ",
+        "html_url" => "https://github.com/example/repo/pull/3#discussion_r3003"
+      }
+    ])
+
+    orchestrator =
+      start_supervised!(
+        {Orchestrator,
+         tracker: SymphonyEx.GitHub.Adapter,
+         workspace: MockWorkspace,
+         agent_runner: MockAgentRunner,
+         tracker_opts: [
+           api_key: "gh-token",
+           owner: "example",
+           repo: "repo",
+           project_number: 7,
+           active_states: ["Todo", "In Progress"],
+           review_task_states: ["In Review"],
+           terminal_states: ["Done"],
+           write_back: [in_progress_state_names: ["In Progress"]],
+           request_fun: &Control.request/1
+         ],
+         automation: [
+           mode: :full_auto,
+           full_auto: [apply_review_feedback: true],
+           reviewbot: [actors: ["gemini-code-assist"]]
+         ],
+         workspace_opts: [],
+         workflow_path: "/tmp/WORKFLOW.md",
+         codex: [],
+         poll_interval_ms: 25,
+         retry_backoff_ms: 10,
+         max_retry_backoff_ms: 10,
+         max_retries: 1,
+         max_concurrent: 1,
+         task_supervisor: SymphonyEx.IntegrationAgentWorkers}
+      )
+
+    Process.sleep(75)
+
+    snapshot = Orchestrator.snapshot(orchestrator)
+    control = Control.snapshot()
+
+    assert snapshot.completed == []
+    assert control.run_calls == []
+  end
+
+  test "skips reviewbot feedback without target PR metadata" do
+    Control.set_issue_body("Service: docs\nPaths: .review/2026-04-24.md\n")
+    Control.set_project_status("In Review")
+
+    Control.set_inbound_pr_review_comments([
+      %{
+        "id" => 3001,
+        "user" => %{"login" => "gemini-code-assist"},
+        "body" => "No Target-PR means this is not actionable.",
+        "html_url" => "https://github.com/example/repo/pull/3#discussion_r3001"
+      }
+    ])
+
+    orchestrator =
+      start_supervised!(
+        {Orchestrator,
+         tracker: SymphonyEx.GitHub.Adapter,
+         workspace: MockWorkspace,
+         agent_runner: MockAgentRunner,
+         tracker_opts: [
+           api_key: "gh-token",
+           owner: "example",
+           repo: "repo",
+           project_number: 7,
+           active_states: ["Todo", "In Progress"],
+           review_task_states: ["In Review"],
+           terminal_states: ["Done"],
+           write_back: [in_progress_state_names: ["In Progress"]],
+           request_fun: &Control.request/1
+         ],
+         automation: [
+           mode: :full_auto,
+           full_auto: [apply_review_feedback: true],
+           reviewbot: [actors: ["gemini-code-assist"]]
+         ],
+         workspace_opts: [],
+         workflow_path: "/tmp/WORKFLOW.md",
+         codex: [],
+         poll_interval_ms: 25,
+         retry_backoff_ms: 10,
+         max_retry_backoff_ms: 10,
+         max_retries: 1,
+         max_concurrent: 1,
+         task_supervisor: SymphonyEx.IntegrationAgentWorkers}
+      )
+
+    Process.sleep(75)
+
+    snapshot = Orchestrator.snapshot(orchestrator)
+    control = Control.snapshot()
+
+    assert snapshot.completed == []
+    assert control.run_calls == []
   end
 
   test "skips @Task comments with successful processed status even without reactions" do

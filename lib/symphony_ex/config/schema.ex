@@ -102,6 +102,7 @@ defmodule SymphonyEx.Config.Schema do
                 ],
                 services: [type: {:list, :string}, default: []],
                 service_concurrency: [type: :any, default: %{}],
+                reviewbot: [type: :any, default: []],
                 full_auto: @automation_full_auto_schema,
                 night_worker: @automation_night_worker_schema
               ]

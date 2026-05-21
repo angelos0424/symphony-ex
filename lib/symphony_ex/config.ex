@@ -456,7 +456,7 @@ defmodule SymphonyEx.Config do
       normalized_key = normalize_key(k)
 
       normalized_value =
-        if normalized_key == :project_fields,
+        if normalized_key in [:project_fields, :service_concurrency],
           do: normalize_project_field_value(v),
           else: normalize_yaml(v)
 
@@ -507,6 +507,8 @@ defmodule SymphonyEx.Config do
   defp normalize_project_field_value(value), do: normalize_yaml(value)
 
   @spec normalize_key(String.t() | atom()) :: atom()
+  defp normalize_key("$reviewbot"), do: :reviewbot
+
   defp normalize_key(key) when is_binary(key) do
     Code.ensure_loaded!(Schema)
 

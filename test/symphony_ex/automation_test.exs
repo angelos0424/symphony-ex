@@ -38,6 +38,20 @@ defmodule SymphonyEx.AutomationTest do
     end
   end
 
+  test "ignores unknown reviewbot keys instead of treating them as actor logins" do
+    config =
+      Automation.normalize(
+        reviewbot: %{
+          "actors" => ["gemini-code-assist"],
+          "enabled" => true,
+          "unrelated-key" => ["should-not-be-treated-as-actor"]
+        }
+      )
+
+    assert config[:reviewbot][:actors] == ["gemini-code-assist"]
+    assert MapSet.equal?(config[:reviewbot][:actors_set], MapSet.new(["gemini-code-assist"]))
+  end
+
   test "derives service from title prefix or configured service label" do
     config = Automation.normalize(services: ["sns", "recipe", "todo"])
 
