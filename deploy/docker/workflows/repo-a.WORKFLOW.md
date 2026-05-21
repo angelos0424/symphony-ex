@@ -54,6 +54,32 @@ Current state: <%= issue.state %>
 - If requirements are genuinely unclear or a required credential/secret is missing, stop and report the blocker clearly.
 - Do not invent extra scope, cleanup, or follow-up work unless explicitly requested by the issue.
 
+## Service Boundary Rules
+This repository contains three independently developed services. Service isolation is folder-only.
+
+| Service | Issue Title Prefix | GitHub Label | Allowed Paths |
+| --- | --- | --- | --- |
+| sns | `[sns]` | `sns` | `sns/**` |
+| recipe | `[recipe]` | `recipe` | `recipe/**` |
+| todo | `[todo]` | `todo` | `todo/**` |
+
+Rules:
+- Determine the target service from the issue title prefix.
+- Valid issue title prefixes are exactly `[sns]`, `[recipe]`, and `[todo]`.
+- Work only inside the matching service folder unless the issue explicitly requests shared/root configuration changes.
+- `[sns]` issues may only change `sns/**` by default.
+- `[recipe]` issues may only change `recipe/**` by default.
+- `[todo]` issues may only change `todo/**` by default.
+- Do not modify another service folder while solving the current issue.
+- Do not create cross-service abstractions unless the issue explicitly asks for it.
+- If a shared/root file must be changed, explain why in the PR body and final summary.
+- If the issue title has no valid service prefix, stop and report the blocker clearly.
+
+Examples:
+- `[sns] Implement post list API` -> work under `sns/**`.
+- `[recipe] Add recipe detail page` -> work under `recipe/**`.
+- `[todo] Add due date validation` -> work under `todo/**`.
+
 ## GitHub/Project State Guidance
 - Treat issues in `Todo` and `In Progress` as active.
 - Treat issues in `In Review` and `Done` as terminal and do no work.
@@ -61,10 +87,22 @@ Current state: <%= issue.state %>
 
 ## Execution Guidelines
 1. Read the issue carefully before touching code.
-2. Read the relevant code and docs in the repository.
-3. Make the requested change.
-4. Run targeted validation if practical.
-5. Keep the final response concise and outcome-focused.
+2. Identify the target service from the issue title prefix: `[sns]`, `[recipe]`, or `[todo]`.
+3. Verify that planned file changes stay inside the matching service folder.
+4. Read only the relevant service code and directly related shared/root files.
+5. Make the smallest requested change.
+6. Run targeted validation for the touched service when practical.
+7. Keep the final response concise and outcome-focused.
+
+## Branch and PR Rules
+- Create or update a branch named with the service prefix when code changes are required.
+- Preferred branch format:
+  - `sns/issue-<number>-<short-description>`
+  - `recipe/issue-<number>-<short-description>`
+  - `todo/issue-<number>-<short-description>`
+- PR titles must keep the same service prefix as the issue.
+- PR bodies must include `Closes #<issue-number>`.
+- If shared/root files were changed, list them separately in the PR body and explain why.
 
 ## GStack Skill Usage
 - If an issue body references `$gstack-...` (for example `$gstack-design-review`), SymphonyEx resolves that skill before starting the turn.
@@ -100,6 +138,7 @@ Current state: <%= issue.state %>
 Return only a single summary block in exactly this format:
 
 ## Symphony 작업 요약
+- service: sns | recipe | todo
 - what changed: ...
 - files touched: ...
 - validation performed: ...
