@@ -571,12 +571,26 @@ defmodule SymphonyEx.GitHub.Adapter do
 
   @spec hydrate_project_candidate_items([map()], keyword()) :: {:ok, [map()]} | {:error, term()}
   defp hydrate_project_candidate_items(items, opts) do
-    Enum.reduce_while(items, {:ok, []}, fn item, {:ok, acc} ->
-      case hydrate_project_candidate_item(item, opts) do
-        {:ok, nil} -> {:cont, {:ok, acc}}
-        {:ok, hydrated_item} -> {:cont, {:ok, [hydrated_item | acc]}}
-        {:error, _reason} = error -> {:halt, error}
-      end
+    max_concurrency = Keyword.get(opts, :project_hydration_concurrency, 5)
+
+    items
+    |> Task.async_stream(&hydrate_project_candidate_item(&1, opts),
+      max_concurrency: max_concurrency,
+      ordered: true,
+      timeout: :infinity
+    )
+    |> Enum.reduce_while({:ok, []}, fn
+      {:ok, {:ok, nil}}, {:ok, acc} ->
+        {:cont, {:ok, acc}}
+
+      {:ok, {:ok, hydrated_item}}, {:ok, acc} ->
+        {:cont, {:ok, [hydrated_item | acc]}}
+
+      {:ok, {:error, _reason} = error}, _acc ->
+        {:halt, error}
+
+      {:exit, reason}, _acc ->
+        {:halt, {:error, reason}}
     end)
     |> case do
       {:ok, hydrated_items} -> {:ok, Enum.reverse(hydrated_items)}
