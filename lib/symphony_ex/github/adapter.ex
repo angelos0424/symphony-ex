@@ -797,18 +797,18 @@ defmodule SymphonyEx.GitHub.Adapter do
           map() | nil
   defp review_task_from_comment(source, number, %{"body" => body} = comment, reviewbot_actors)
        when is_binary(body) do
-    trimmed = String.trim_leading(body)
+    trimmed = String.trim(body)
 
     cond do
       review_task_comment_inactive?(comment) ->
         nil
 
-      String.match?(trimmed, ~r/^@Task\b/i) ->
+      String.match?(String.trim_leading(body), ~r/^@Task\b/i) ->
         build_review_task(source, number, comment, body)
 
-      reviewbot_feedback?(source, comment, reviewbot_actors) ->
+      trimmed != "" and reviewbot_feedback?(source, comment, reviewbot_actors) ->
         body =
-          "@Task review comment\n\nReviewbot feedback from #{comment_author(comment)}:\n\n#{String.trim(body)}"
+          "@Task review comment\n\nReviewbot feedback from #{comment_author(comment)}:\n\n#{trimmed}"
 
         build_review_task(source, number, comment, body)
 
@@ -842,8 +842,18 @@ defmodule SymphonyEx.GitHub.Adapter do
 
   defp reviewbot_feedback?(_source, _comment, _reviewbot_actors), do: false
 
-  defp comment_author(comment),
-    do: comment |> get_in(["user", "login"]) |> to_string() |> String.downcase()
+  defp comment_author(comment) do
+    case get_in(comment, ["user", "login"]) do
+      login when is_binary(login) ->
+        case login |> String.trim() |> String.downcase() do
+          "" -> "unknown"
+          normalized -> normalized
+        end
+
+      _ ->
+        "unknown"
+    end
+  end
 
   @spec review_task_comment_inactive?(map()) :: boolean()
   defp review_task_comment_inactive?(comment) do

@@ -201,6 +201,7 @@ defmodule SymphonyEx.ConfigTest do
           actors:
             - gemini-code-assist
             - coderabbitai
+          enabled: true
         full-auto:
           apply-review-feedback: true
           auto-merge: true

@@ -192,7 +192,12 @@ defmodule SymphonyEx.Automation do
 
   defp normalize_reviewbot(%{} = opts) do
     opts
-    |> Enum.map(fn {key, value} -> {normalize_reviewbot_key(key), value} end)
+    |> Enum.flat_map(fn {key, value} ->
+      case normalize_reviewbot_key(key) do
+        nil -> []
+        normalized_key -> [{normalized_key, value}]
+      end
+    end)
     |> normalize_reviewbot()
   end
 
@@ -206,11 +211,11 @@ defmodule SymphonyEx.Automation do
       "actors" -> :actors
       "actor_logins" -> :actor_logins
       "logins" -> :logins
-      _other -> :actors
+      _other -> nil
     end
   end
 
-  defp normalize_reviewbot_key(_key), do: :actors
+  defp normalize_reviewbot_key(_key), do: nil
 
   defp normalize_reviewbot_actors(actors) when is_list(actors) do
     actors
@@ -254,15 +259,7 @@ defmodule SymphonyEx.Automation do
     end)
   end
 
-  defp validate_reviewbot!(opts) do
-    actors = Keyword.get(opts, :actors, [])
-    duplicates = duplicates(actors)
-
-    if duplicates != [] do
-      raise ArgumentError,
-            "automation.reviewbot.actors contains duplicate actor logins: #{Enum.join(duplicates, ", ")}"
-    end
-  end
+  defp validate_reviewbot!(_opts), do: :ok
 
   defp validate_night_worker!(opts) do
     validate_timezone!(Keyword.get(opts, :timezone, "Etc/UTC"))

@@ -518,6 +518,12 @@ defmodule SymphonyEx.GitHubIssueFlowTest do
         "user" => %{"login" => "coderabbitai"},
         "body" => "This branch should handle nil metadata explicitly.",
         "html_url" => "https://github.com/example/repo/pull/3#discussion_r3001"
+      },
+      %{
+        "id" => 3002,
+        "user" => %{},
+        "body" => "@Task\nCheck the fallback when the author is missing.",
+        "html_url" => "https://github.com/example/repo/pull/3#discussion_r3002"
       }
     ])
 
@@ -565,6 +571,8 @@ defmodule SymphonyEx.GitHubIssueFlowTest do
     assert description =~ "## Review Follow-up Task"
     assert description =~ "Reviewbot feedback from gemini-code-assist"
     assert description =~ "Reviewbot feedback from coderabbitai"
+    assert description =~ "### pr-review-comment:3002 by unknown"
+    assert description =~ "Check the fallback when the author is missing."
     assert description =~ "`@Task review comment`: inspect the review comments"
 
     assert Enum.any?(
@@ -575,6 +583,11 @@ defmodule SymphonyEx.GitHubIssueFlowTest do
     assert Enum.any?(
              control.issue_bodies,
              &String.contains?(&1, "processed_task: pr-review-comment:3001 status: success")
+           )
+
+    assert Enum.any?(
+             control.issue_bodies,
+             &String.contains?(&1, "processed_task: pr-review-comment:3002 status: success")
            )
   end
 
@@ -597,6 +610,12 @@ defmodule SymphonyEx.GitHubIssueFlowTest do
         "user" => %{"login" => "human-reviewer"},
         "body" => "Visible but not configured as reviewbot and not @Task.",
         "html_url" => "https://github.com/example/repo/pull/3#discussion_r3002"
+      },
+      %{
+        "id" => 3003,
+        "user" => %{"login" => "gemini-code-assist"},
+        "body" => "  \n\t  ",
+        "html_url" => "https://github.com/example/repo/pull/3#discussion_r3003"
       }
     ])
 
