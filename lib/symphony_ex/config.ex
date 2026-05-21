@@ -49,6 +49,14 @@ defmodule SymphonyEx.Config do
 
       case NimbleOptions.validate(merged, Schema.schema()) do
         {:ok, validated} ->
+          automation =
+            validated
+            |> Keyword.get(:automation, [])
+            |> SymphonyEx.Automation.normalize()
+            |> SymphonyEx.Automation.validate!()
+
+          validated = Keyword.put(validated, :automation, automation)
+
           with {:ok, validated} <- validate_tracker_requirements(validated) do
             {:ok, normalize_runtime_structs(validated)}
           end
@@ -467,7 +475,12 @@ defmodule SymphonyEx.Config do
     "warning" => :warning,
     "error" => :error,
     "merge" => :merge,
-    "replace" => :replace
+    "replace" => :replace,
+    "default" => :default,
+    "full-auto" => :full_auto,
+    "full_auto" => :full_auto,
+    "night-worker" => :night_worker,
+    "night_worker" => :night_worker
   }
 
   defp normalize_yaml(value) when is_binary(value) do

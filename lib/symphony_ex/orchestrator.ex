@@ -18,6 +18,7 @@ defmodule SymphonyEx.Orchestrator do
 
   alias SymphonyEx.{
     AgentRunner,
+    Automation,
     Dashboard,
     GitHub.Adapter,
     Logging,
@@ -73,6 +74,7 @@ defmodule SymphonyEx.Orchestrator do
           agent_runner: module(),
           workflow_path: String.t() | nil,
           codex_opts: keyword(),
+          automation: Automation.t(),
           poll_interval_ms: pos_integer(),
           max_concurrent: pos_integer(),
           max_retries: non_neg_integer(),
@@ -104,7 +106,8 @@ defmodule SymphonyEx.Orchestrator do
     :human_blocked,
     :missing_required_metadata,
     :missing_title,
-    :serialized_conflict
+    :serialized_conflict,
+    :unknown_service
   ]
 
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -147,6 +150,7 @@ defmodule SymphonyEx.Orchestrator do
       agent_runner: Keyword.get(opts, :agent_runner, AgentRunner),
       workflow_path: Keyword.get(opts, :workflow_path),
       codex_opts: Keyword.get(opts, :codex, []),
+      automation: automation_config(opts),
       poll_interval_ms: poll_interval_ms,
       max_concurrent: Keyword.get(opts, :max_concurrent, 1),
       max_retries: Keyword.get(opts, :max_retries, 2),
@@ -218,6 +222,7 @@ defmodule SymphonyEx.Orchestrator do
         config |> Keyword.get(:tracker, []) |> ensure_tracker_lifecycle(state.lifecycle)
 
       orchestrator_opts = Keyword.get(config, :orchestrator, [])
+      automation = Keyword.get(config, :automation, state.automation)
 
       state
       |> Map.put(:tracker_opts, tracker_opts)
@@ -235,6 +240,7 @@ defmodule SymphonyEx.Orchestrator do
         Keyword.get(orchestrator_opts, :backoff_base_ms, state.retry_backoff_ms)
       )
       |> Map.put(:blocked_labels, blocked_labels(orchestrator_opts))
+      |> Map.put(:automation, automation)
       |> Map.put(:concurrency_limits, concurrency_limits(orchestrator_opts))
       |> Map.put(:serialization_label_prefixes, serialization_label_prefixes(orchestrator_opts))
       |> Map.put(
@@ -1079,6 +1085,14 @@ defmodule SymphonyEx.Orchestrator do
     end)
   end
 
+  @spec automation_config(keyword()) :: Automation.t()
+  defp automation_config(opts) do
+    opts
+    |> Keyword.get(:automation, Automation.default_config())
+    |> Automation.normalize()
+    |> Automation.validate!()
+  end
+
   @spec serialization_label_prefixes(keyword()) :: [String.t()]
   defp serialization_label_prefixes(opts) do
     opts
@@ -1094,9 +1108,9 @@ defmodule SymphonyEx.Orchestrator do
     with :ok <- check_issue_basics(issue),
          :ok <- check_issue_not_duplicate(state, issue),
          :ok <- check_issue_not_blocked(state, issue) do
-      if class_slots_available?(state, classify_issue(issue)),
+      if class_slots_available?(state, issue) and service_slots_available?(state, issue),
         do: :ok,
-        else: {:skip, :class_saturated}
+        else: {:skip, saturated_reason(state, issue)}
     end
   end
 
@@ -1133,6 +1147,7 @@ defmodule SymphonyEx.Orchestrator do
       blocked_issue?(issue, state.blocked_labels) -> {:skip, :human_blocked}
       dependency_blocked?(issue) -> {:skip, :dependency_blocked}
       missing_required_metadata?(issue) -> {:skip, :missing_required_metadata}
+      unknown_service?(state, issue) -> {:skip, :unknown_service}
       conflict_locked?(state, issue) -> {:skip, :serialized_conflict}
       true -> :ok
     end
@@ -1265,12 +1280,19 @@ defmodule SymphonyEx.Orchestrator do
       |> Enum.map(&normalize_label/1)
       |> Enum.filter(&serialization_label?(&1, state.serialization_label_prefixes))
 
+    service_keys =
+      case automation_issue_service(issue, state) do
+        service when is_binary(service) -> ["service:" <> service]
+        _other -> []
+      end
+
     keys =
-      (label_keys ++ hint_keys)
-      |> Enum.uniq()
-      |> case do
-        [] when state.default_conflict_scope_to_class ->
-          ["class:" <> Atom.to_string(classify_issue(issue))]
+      case Enum.uniq(service_keys ++ label_keys ++ hint_keys) do
+        [] ->
+          if state.default_conflict_scope_to_class and
+               is_nil(automation_issue_service(issue, state)),
+             do: ["class:" <> Atom.to_string(classify_issue(issue))],
+             else: []
 
         collected ->
           collected
@@ -1300,14 +1322,51 @@ defmodule SymphonyEx.Orchestrator do
   defp class_rank(:docs), do: 2
   defp class_rank(_other), do: 3
 
-  @spec class_slots_available?(state(), concurrency_class()) :: boolean()
-  defp class_slots_available?(state, klass) do
+  @spec class_slots_available?(state(), Issue.t()) :: boolean()
+  defp class_slots_available?(state, %Issue{} = issue) do
+    klass = classify_issue(issue)
+
     running_count =
       state.running
       |> Map.values()
       |> Enum.count(&(&1.concurrency_class == klass))
 
     running_count < Map.get(state.concurrency_limits, klass, state.max_concurrent)
+  end
+
+  @spec service_slots_available?(state(), Issue.t()) :: boolean()
+  defp service_slots_available?(state, %Issue{} = issue) do
+    case automation_issue_service(issue, state) do
+      service when is_binary(service) ->
+        limit = state.automation |> Keyword.get(:service_concurrency, %{}) |> Map.get(service, 1)
+
+        running_count =
+          state.running
+          |> Map.values()
+          |> Enum.count(&(automation_issue_service(&1.issue, state) == service))
+
+        running_count < limit
+
+      _other ->
+        true
+    end
+  end
+
+  defp saturated_reason(state, issue) do
+    if not service_slots_available?(state, issue),
+      do: :serialized_conflict,
+      else: :class_saturated
+  end
+
+  defp unknown_service?(state, issue) do
+    match?({:error, {:unknown_service, _}}, Automation.issue_service(issue, state.automation))
+  end
+
+  defp automation_issue_service(issue, state) do
+    case Automation.issue_service(issue, state.automation) do
+      {:error, _reason} -> nil
+      service -> service
+    end
   end
 
   @spec blocked_issue?(Issue.t(), MapSet.t(String.t())) :: boolean()
