@@ -216,10 +216,11 @@ defmodule SymphonyEx.GitHub.Client do
     owner = Keyword.fetch!(opts, :owner)
     project_number = Keyword.fetch!(opts, :project_number)
     include_issue_body = Keyword.get(opts, :include_issue_body, true)
+    item_query = Keyword.get(opts, :project_item_query)
 
     query = project_items_query(include_issue_body)
 
-    variables = %{"owner" => owner, "number" => project_number}
+    variables = %{"owner" => owner, "number" => project_number, "query" => item_query}
 
     with {:ok, data} <- graphql(query, variables, Keyword.put(opts, :allow_partial_data, true)),
          {:ok, project} <- extract_project(data, owner) do
@@ -254,7 +255,7 @@ defmodule SymphonyEx.GitHub.Client do
       end
 
     """
-    query ProjectItems($owner: String!, $number: Int!) {
+    query ProjectItems($owner: String!, $number: Int!, $query: String) {
       organization(login: $owner) {
         projectV2(number: $number) {
           id
@@ -284,7 +285,7 @@ defmodule SymphonyEx.GitHub.Client do
               }
             }
           }
-          items(first: 100) {
+          items(first: 100, query: $query) {
             nodes {
               id
               fieldValues(first: 50) {
@@ -397,7 +398,7 @@ defmodule SymphonyEx.GitHub.Client do
               }
             }
           }
-          items(first: 100) {
+          items(first: 100, query: $query) {
             nodes {
               id
               fieldValues(first: 50) {

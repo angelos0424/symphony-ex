@@ -245,7 +245,13 @@ defmodule SymphonyEx.GitHub.AdapterTest do
     request_fun = fn request ->
       case {request.method, to_string(request.url)} do
         {:post, "https://api.github.com/graphql"} ->
-          refute String.contains?(request.options[:json]["query"], "\n                  body\n")
+          json = request.options[:json]
+
+          refute String.contains?(json["query"], "\n                  body\n")
+          assert json["query"] =~ "items(first: 100, query: $query)"
+
+          assert json["variables"]["query"] ==
+                   "is:open status:\"Todo\",\"In Progress\",\"In Review\""
 
           {:ok,
            %Req.Response{

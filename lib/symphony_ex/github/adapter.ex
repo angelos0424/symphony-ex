@@ -518,8 +518,14 @@ defmodule SymphonyEx.GitHub.Adapter do
     active_states = Keyword.get(opts, :active_states, ["In Progress", "Todo"])
     review_task_states = Keyword.get(opts, :review_task_states, ["In Review"])
     identifiers = Keyword.get(opts, :include_issue_identifiers, [])
+    project_item_query = project_item_query_filter(active_states ++ review_task_states)
 
-    with {:ok, items} <- Client.list_project_items(Keyword.put(opts, :include_issue_body, false)),
+    list_opts =
+      opts
+      |> Keyword.put(:include_issue_body, false)
+      |> Keyword.put(:project_item_query, project_item_query)
+
+    with {:ok, items} <- Client.list_project_items(list_opts),
          {:ok, issues} <-
            items
            |> Enum.filter(
@@ -535,6 +541,32 @@ defmodule SymphonyEx.GitHub.Adapter do
 
       {:ok, issues}
     end
+  end
+
+  @spec project_item_query_filter([String.t()]) :: String.t()
+  defp project_item_query_filter(states) do
+    states =
+      states
+      |> Enum.filter(&is_binary/1)
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.uniq()
+
+    status_filter =
+      case states do
+        [] -> nil
+        values -> "status:" <> Enum.map_join(values, ",", &quote_project_query_value/1)
+      end
+
+    ["is:open", status_filter]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join(" ")
+  end
+
+  @spec quote_project_query_value(String.t()) :: String.t()
+  defp quote_project_query_value(value) do
+    escaped = String.replace(value, "\"", "\\\"")
+    "\"#{escaped}\""
   end
 
   @spec hydrate_project_candidate_items([map()], keyword()) :: {:ok, [map()]} | {:error, term()}
