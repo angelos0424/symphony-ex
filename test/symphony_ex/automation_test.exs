@@ -17,9 +17,25 @@ defmodule SymphonyEx.AutomationTest do
         ]
       )
 
+    assert [%{start_minute: 1380, end_minute: 420}] = config[:night_worker][:windows]
     assert Automation.resolve_mode(config, ~U[2026-05-22 23:30:00Z]) == :full_auto
     assert Automation.resolve_mode(config, ~U[2026-05-22 06:30:00Z]) == :full_auto
     assert Automation.resolve_mode(config, ~U[2026-05-22 12:00:00Z]) == :default
+  end
+
+  test "validates night-worker timezone names" do
+    config =
+      Automation.normalize(
+        mode: :night_worker,
+        night_worker: [
+          timezone: "Not/AZone",
+          windows: [%{start: "23:00", end: "07:00"}]
+        ]
+      )
+
+    assert_raise ArgumentError, ~r/valid IANA timezone/, fn ->
+      Automation.validate!(config)
+    end
   end
 
   test "derives service from title prefix or configured service label" do

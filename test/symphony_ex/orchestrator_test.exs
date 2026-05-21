@@ -1219,6 +1219,7 @@ defmodule SymphonyEx.OrchestratorTest do
     orchestrator =
       start_orchestrator(
         max_concurrent: 4,
+        concurrency_limits: [code: 3],
         automation: [
           services: ["sns", "recipe", "todo"],
           service_concurrency: %{"sns" => 1, "recipe" => 1, "todo" => 1}
@@ -1234,6 +1235,71 @@ defmodule SymphonyEx.OrchestratorTest do
 
     assert Enum.any?(Control.updates(), fn %{issue: issue, payload: payload} ->
              issue.identifier == "43" and payload.status == :gated and
+               payload.gating_reason == :serialized_conflict
+           end)
+  end
+
+  test "automation services still respect class concurrency limits" do
+    sns = issue_fixture("44", title: "SNS: add profile feed", labels: ["bug"])
+    recipe = issue_fixture("45", title: "recipe: add importer", labels: ["feature"])
+
+    start_supervised!(
+      {Control,
+       test_pid: self(),
+       candidate_batches: [[sns, recipe]],
+       run_results: [%{status: :success, events: [], error: nil}]}
+    )
+
+    orchestrator =
+      start_orchestrator(
+        max_concurrent: 4,
+        concurrency_limits: [code: 1],
+        automation: [
+          services: ["sns", "recipe"],
+          service_concurrency: %{"sns" => 1, "recipe" => 1}
+        ]
+      )
+
+    wait_until(fn ->
+      snapshot = Orchestrator.snapshot(orchestrator)
+      map_size(snapshot.running) == 0 and length(Control.runs()) == 1
+    end)
+
+    assert Control.runs() == ["44"]
+  end
+
+  test "untagged issues keep class conflict fallback when automation services are configured" do
+    first = issue_fixture("46", title: "code task one", labels: ["bug"])
+    second = issue_fixture("47", title: "code task two", labels: ["feature"])
+
+    start_supervised!(
+      {Control,
+       test_pid: self(),
+       candidate_batches: [[first, second]],
+       run_results: [%{status: :success, events: [], error: nil}]}
+    )
+
+    orchestrator =
+      start_orchestrator(
+        max_concurrent: 4,
+        concurrency_limits: [code: 4],
+        automation: [services: ["sns"], service_concurrency: %{"sns" => 1}]
+      )
+
+    wait_until(fn ->
+      snapshot = Orchestrator.snapshot(orchestrator)
+
+      map_size(snapshot.running) == 0 and length(Control.runs()) == 1 and
+        Enum.any?(Control.updates(), fn %{issue: issue, payload: payload} ->
+          issue.identifier == "47" and payload.status == :gated and
+            payload.gating_reason == :serialized_conflict
+        end)
+    end)
+
+    assert Control.runs() == ["46"]
+
+    assert Enum.any?(Control.updates(), fn %{issue: issue, payload: payload} ->
+             issue.identifier == "47" and payload.status == :gated and
                payload.gating_reason == :serialized_conflict
            end)
   end

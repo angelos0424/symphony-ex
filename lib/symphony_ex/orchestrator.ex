@@ -1289,9 +1289,10 @@ defmodule SymphonyEx.Orchestrator do
     keys =
       case Enum.uniq(service_keys ++ label_keys ++ hint_keys) do
         [] ->
-          if state.default_conflict_scope_to_class and not automation_services_configured?(state),
-            do: ["class:" <> Atom.to_string(classify_issue(issue))],
-            else: []
+          if state.default_conflict_scope_to_class and
+               is_nil(automation_issue_service(issue, state)),
+             do: ["class:" <> Atom.to_string(classify_issue(issue))],
+             else: []
 
         collected ->
           collected
@@ -1323,18 +1324,14 @@ defmodule SymphonyEx.Orchestrator do
 
   @spec class_slots_available?(state(), Issue.t()) :: boolean()
   defp class_slots_available?(state, %Issue{} = issue) do
-    if automation_issue_service(issue, state) do
-      true
-    else
-      klass = classify_issue(issue)
+    klass = classify_issue(issue)
 
-      running_count =
-        state.running
-        |> Map.values()
-        |> Enum.count(&(&1.concurrency_class == klass))
+    running_count =
+      state.running
+      |> Map.values()
+      |> Enum.count(&(&1.concurrency_class == klass))
 
-      running_count < Map.get(state.concurrency_limits, klass, state.max_concurrent)
-    end
+    running_count < Map.get(state.concurrency_limits, klass, state.max_concurrent)
   end
 
   @spec service_slots_available?(state(), Issue.t()) :: boolean()
@@ -1370,10 +1367,6 @@ defmodule SymphonyEx.Orchestrator do
       {:error, _reason} -> nil
       service -> service
     end
-  end
-
-  defp automation_services_configured?(state) do
-    state.automation |> Keyword.get(:services, []) |> Enum.any?()
   end
 
   @spec blocked_issue?(Issue.t(), MapSet.t(String.t())) :: boolean()

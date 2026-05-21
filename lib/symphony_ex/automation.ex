@@ -10,7 +10,12 @@ defmodule SymphonyEx.Automation do
 
   @type mode :: :default | :full_auto | :night_worker
   @type resolved_mode :: :default | :full_auto
-  @type window :: %{start: String.t(), end: String.t()}
+  @type window :: %{
+          start: String.t(),
+          end: String.t(),
+          start_minute: non_neg_integer(),
+          end_minute: non_neg_integer()
+        }
   @type t :: keyword()
 
   @default [
@@ -48,6 +53,7 @@ defmodule SymphonyEx.Automation do
     config
     |> Keyword.put(:mode, normalize_mode(Keyword.get(config, :mode, :default)))
     |> Keyword.put(:services, services)
+    |> Keyword.put(:services_set, MapSet.new(services))
     |> Keyword.put(:service_concurrency, service_concurrency)
     |> Keyword.update(:night_worker, @default[:night_worker], &normalize_night_worker/1)
   end
@@ -103,8 +109,7 @@ defmodule SymphonyEx.Automation do
           String.t() | nil | {:error, {:unknown_service, String.t()}}
   def issue_service(%Issue{} = issue, config) do
     services = Keyword.get(config, :services, [])
-
-    configured = MapSet.new(services)
+    configured = Keyword.get(config, :services_set, MapSet.new(services))
 
     explicit_services =
       issue.labels
@@ -168,6 +173,7 @@ defmodule SymphonyEx.Automation do
     opts
     |> Keyword.put(:mode_during_window, normalize_mode(Keyword.get(opts, :mode_during_window)))
     |> Keyword.put(:mode_outside_window, normalize_mode(Keyword.get(opts, :mode_outside_window)))
+    |> Keyword.update(:windows, [], fn windows -> Enum.map(windows, &normalize_window/1) end)
   end
 
   defp validate_service_concurrency!(config) do
@@ -192,6 +198,7 @@ defmodule SymphonyEx.Automation do
   end
 
   defp validate_night_worker!(opts) do
+    validate_timezone!(Keyword.get(opts, :timezone, "Etc/UTC"))
     Enum.each(Keyword.get(opts, :windows, []), &validate_window!/1)
 
     Enum.each([:mode_during_window, :mode_outside_window], fn key ->
@@ -202,8 +209,8 @@ defmodule SymphonyEx.Automation do
   end
 
   defp validate_window!(window) when is_map(window) or is_list(window) do
-    with {:ok, start_minute} <- parse_time(window_value(window, :start)),
-         {:ok, end_minute} <- parse_time(window_value(window, :end)),
+    with start_minute when is_integer(start_minute) <- window_value(window, :start_minute),
+         end_minute when is_integer(end_minute) <- window_value(window, :end_minute),
          false <- start_minute == end_minute do
       :ok
     else
@@ -224,8 +231,8 @@ defmodule SymphonyEx.Automation do
     opts
     |> Keyword.get(:windows, [])
     |> Enum.any?(fn window ->
-      {:ok, start_minute} = parse_time(window_value(window, :start))
-      {:ok, end_minute} = parse_time(window_value(window, :end))
+      start_minute = window_value(window, :start_minute)
+      end_minute = window_value(window, :end_minute)
       in_window?(minute_of_day, start_minute, end_minute)
     end)
   end
@@ -251,6 +258,56 @@ defmodule SymphonyEx.Automation do
 
   defp window_value(window, key) when is_list(window) do
     Keyword.get(window, key) || Keyword.get(window, String.to_atom(to_string(key)))
+  end
+
+  defp normalize_window(window) when is_map(window) do
+    start_minute = parse_time!(window_value(window, :start))
+    end_minute = parse_time!(window_value(window, :end))
+
+    window
+    |> Map.put(:start_minute, start_minute)
+    |> Map.put(:end_minute, end_minute)
+  end
+
+  defp normalize_window(window) when is_list(window) do
+    start_minute = parse_time!(window_value(window, :start))
+    end_minute = parse_time!(window_value(window, :end))
+
+    window
+    |> Keyword.put(:start_minute, start_minute)
+    |> Keyword.put(:end_minute, end_minute)
+  end
+
+  defp normalize_window(_window) do
+    raise ArgumentError, "automation.night_worker.windows entries must include start and end"
+  end
+
+  defp parse_time!(value) do
+    case parse_time(value) do
+      {:ok, minute} ->
+        minute
+
+      :error ->
+        raise ArgumentError,
+              "automation.night_worker.windows entries must use distinct HH:MM start/end values"
+    end
+  end
+
+  defp validate_timezone!(timezone) when is_binary(timezone) do
+    cond do
+      String.contains?(timezone, ["..", "//"]) or String.starts_with?(timezone, "/") ->
+        raise ArgumentError, "automation.night_worker.timezone must be a valid IANA timezone"
+
+      File.regular?(Path.join("/usr/share/zoneinfo", timezone)) ->
+        :ok
+
+      true ->
+        raise ArgumentError, "automation.night_worker.timezone must be a valid IANA timezone"
+    end
+  end
+
+  defp validate_timezone!(_timezone) do
+    raise ArgumentError, "automation.night_worker.timezone must be a valid IANA timezone"
   end
 
   defp parse_time(value) when is_binary(value) do
