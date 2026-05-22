@@ -356,29 +356,8 @@ defmodule SymphonyEx.Automation do
   defp local_datetime(now, timezone) do
     case DateTime.shift_zone(now, timezone) do
       {:ok, shifted} -> shifted
-      {:error, _reason} -> local_datetime_from_system_zoneinfo(now, timezone) || now
+      {:error, _reason} -> now
     end
-  end
-
-  defp local_datetime_from_system_zoneinfo(now, timezone) do
-    case System.cmd("date", ["+%Y-%m-%dT%H:%M:%S", "-d", DateTime.to_iso8601(now)],
-           env: [{"TZ", timezone}],
-           stderr_to_stdout: true
-         ) do
-      {output, 0} ->
-        output
-        |> String.trim()
-        |> NaiveDateTime.from_iso8601()
-        |> case do
-          {:ok, naive} -> DateTime.from_naive!(naive, "Etc/UTC")
-          {:error, _reason} -> nil
-        end
-
-      _other ->
-        nil
-    end
-  rescue
-    _ -> nil
   end
 
   defp in_window?(minute, start_minute, end_minute) when start_minute < end_minute do

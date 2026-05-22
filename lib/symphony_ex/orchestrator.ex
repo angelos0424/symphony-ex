@@ -506,6 +506,8 @@ defmodule SymphonyEx.Orchestrator do
     else
       case dispatch_eligibility(state, issue) do
         :ok ->
+          automation_status = Automation.mode_status(state.automation)
+
           Logger.debug(
             "dispatching issue",
             Logging.logger_metadata(
@@ -514,10 +516,8 @@ defmodule SymphonyEx.Orchestrator do
                 class: classify_issue(issue),
                 dispatch_source: source,
                 dispatch_priority: dispatch_priority(issue, state),
-                automation_configured_mode:
-                  state.automation |> Automation.mode_status() |> Map.get(:configured_mode),
-                automation_effective_mode:
-                  state.automation |> Automation.mode_status() |> Map.get(:effective_mode),
+                automation_configured_mode: automation_status.configured_mode,
+                automation_effective_mode: automation_status.effective_mode,
                 conflict_keys:
                   issue_conflict_keys(issue, state) |> Logging.normalize_conflict_keys()
               })
