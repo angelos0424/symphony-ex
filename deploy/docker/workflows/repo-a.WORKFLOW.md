@@ -139,9 +139,9 @@ Examples:
 
 ## Branch and PR Rules
 - Create or update a branch named with the service prefix when code changes are required.
-- Create feature branches from the repository base branch, currently `develop`.
-- Open pull requests against the repository base branch, currently `develop`, not `main`.
-- If continuing an existing PR via `Target-PR` / `Target-Branch`, keep that PR's existing head branch but ensure the PR base is `develop`; if it is not, report the mismatch before pushing more changes.
+- Create feature branches from the repository base branch.
+- Open pull requests against the repository base branch.
+- If continuing an existing PR via `Target-PR` / `Target-Branch`, keep that PR's existing head branch but verify it targets the repository base branch before pushing more changes.
 - Preferred branch format:
   - `post-manager/issue-<number>-<short-description>`
   - `receipt-manager/issue-<number>-<short-description>`
