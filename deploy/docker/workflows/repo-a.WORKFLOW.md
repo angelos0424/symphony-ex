@@ -31,13 +31,13 @@ orchestrator:
 automation:
   mode: night-worker
   services:
-    - sns
-    - recipe
-    - todo
+    - post-manager
+    - receipt-manager
+    - todo-manager
   service-concurrency:
-    sns: 1
-    recipe: 1
-    todo: 1
+    post-manager: 1
+    receipt-manager: 1
+    todo-manager: 1
   reviewbot:
     actors:
       - gemini-code-assist
@@ -92,26 +92,26 @@ This repository contains three independently developed services. Runtime service
 
 | Service | Issue Title Prefix | GitHub Label | Allowed Paths |
 | --- | --- | --- | --- |
-| sns | `[sns]` | `sns` | `sns/**` |
-| recipe | `[recipe]` | `recipe` | `recipe/**` |
-| todo | `[todo]` | `todo` | `todo/**` |
+| post-manager | `[post-manager]` | `post-manager` | `post-manager/**` |
+| receipt-manager | `[receipt-manager]` | `receipt-manager` | `receipt-manager/**` |
+| todo-manager | `[todo-manager]` | `todo-manager` | `todo-manager/**` |
 
 Rules:
 - Determine the target service from the issue title prefix.
-- Valid issue title prefixes are exactly `[sns]`, `[recipe]`, and `[todo]`.
+- Valid issue title prefixes are exactly `[post-manager]`, `[receipt-manager]`, and `[todo-manager]`.
 - Work only inside the matching service folder unless the issue explicitly requests shared/root configuration changes.
-- `[sns]` issues may only change `sns/**` by default.
-- `[recipe]` issues may only change `recipe/**` by default.
-- `[todo]` issues may only change `todo/**` by default.
+- `[post-manager]` issues may only change `post-manager/**` by default.
+- `[receipt-manager]` issues may only change `receipt-manager/**` by default.
+- `[todo-manager]` issues may only change `todo-manager/**` by default.
 - Do not modify another service folder while solving the current issue.
 - Do not create cross-service abstractions unless the issue explicitly asks for it.
 - If a shared/root file must be changed, explain why in the PR body and the 'what changed' section of the final summary.
 - If the issue title has no valid service prefix, stop and report the blocker clearly.
 
 Examples:
-- `[sns] Implement post list API` -> work under `sns/**`.
-- `[recipe] Add recipe detail page` -> work under `recipe/**`.
-- `[todo] Add due date validation` -> work under `todo/**`.
+- `[post-manager] Implement post list API` -> work under `post-manager/**`.
+- `[receipt-manager] Add receipt-manager detail page` -> work under `receipt-manager/**`.
+- `[todo-manager] Add due date validation` -> work under `todo-manager/**`.
 
 ## Automation Mode
 - Configured mode is `night-worker`.
@@ -123,23 +123,29 @@ Examples:
 ## GitHub/Project State Guidance
 - Treat issues in `Todo` and `In Progress` as active.
 - Treat issues in `In Review` and `Done` as terminal and do no work.
+- Use the current GitHub Project status as the authoritative dispatch state.
+- If the issue body contains a `<!-- symphony:status --> ... <!-- /symphony:status -->` block, treat it as historical breadcrumb text only; it may be stale and must not override an active project status like `Todo` or `In Progress`.
 - If the issue is not in a supported state, report that briefly and stop.
 
 ## Execution Guidelines
 1. Read the issue carefully before touching code.
-2. Identify the target service from the issue title prefix: `[sns]`, `[recipe]`, or `[todo]`.
+2. Identify the target service from the issue title prefix: `[post-manager]`, `[receipt-manager]`, or `[todo-manager]`.
 3. Verify that planned file changes stay inside the matching service folder.
 4. Read only the relevant service code and directly related shared/root files.
 5. Make the smallest requested change.
 6. Run targeted validation for the touched service when practical.
-7. Keep the final response concise and outcome-focused.
+7. Update `TODOS.md` after completed tasks or PR-scope changes when the issue changes actionable work, dependencies, validation notes, or completion state.
+8. Keep the final response concise and outcome-focused.
 
 ## Branch and PR Rules
 - Create or update a branch named with the service prefix when code changes are required.
+- Create feature branches from the repository base branch, currently `develop`.
+- Open pull requests against the repository base branch, currently `develop`, not `main`.
+- If continuing an existing PR via `Target-PR` / `Target-Branch`, keep that PR's existing head branch but ensure the PR base is `develop`; if it is not, report the mismatch before pushing more changes.
 - Preferred branch format:
-  - `sns/issue-<number>-<short-description>`
-  - `recipe/issue-<number>-<short-description>`
-  - `todo/issue-<number>-<short-description>`
+  - `post-manager/issue-<number>-<short-description>`
+  - `receipt-manager/issue-<number>-<short-description>`
+  - `todo-manager/issue-<number>-<short-description>`
 - PR titles must keep the same service prefix as the issue.
 - PR bodies must include `Closes #<issue-number>`.
 - If shared/root files were changed, list them separately in the PR body and explain why.
@@ -178,7 +184,7 @@ Examples:
 Return only a single summary block in exactly this format:
 
 ## Symphony 작업 요약
-- service: ... (sns | recipe | todo)
+- service: ... (post-manager | receipt-manager | todo-manager)
 - what changed: ...
 - files touched: ...
 - validation performed: ...
