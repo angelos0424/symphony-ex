@@ -198,7 +198,8 @@ defmodule SymphonyEx.Config.Schema do
                 poll_interval_ms: [type: :pos_integer, default: 30_000],
                 max_concurrent: [type: :pos_integer, default: 1],
                 max_retries: [type: :non_neg_integer, default: 3],
-                backoff_base_ms: [type: :pos_integer, default: 60_000]
+                backoff_base_ms: [type: :pos_integer, default: 60_000],
+                concurrency_limits: [type: :any, default: []]
               ]
             ],
             logging: [

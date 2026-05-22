@@ -187,6 +187,13 @@ defmodule SymphonyEx.ConfigTest do
     test "parses automation config with service concurrency and night-worker windows" do
       workflow = """
       ---
+      orchestrator:
+        max-concurrent: 3
+        concurrency-limits:
+          default: 3
+          code: 3
+          docs: 2
+          infra: 1
       automation:
         mode: night-worker
         services:
@@ -226,7 +233,17 @@ defmodule SymphonyEx.ConfigTest do
 
       with_env([{"GITHUB_TOKEN", "ghs_test"}], fn ->
         config = Config.load!(path)
+        orchestrator = config[:orchestrator]
         automation = config[:automation]
+
+        assert orchestrator[:max_concurrent] == 3
+
+        assert Map.new(orchestrator[:concurrency_limits]) == %{
+                 default: 3,
+                 code: 3,
+                 docs: 2,
+                 infra: 1
+               }
 
         assert automation[:mode] == :night_worker
         assert automation[:services] == ["sns", "recipe", "todo"]

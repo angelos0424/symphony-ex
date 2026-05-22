@@ -23,6 +23,11 @@ orchestrator:
   max-concurrent: 3
   max-retries: 3
   backoff-base-ms: 10000
+  concurrency-limits:
+    default: 3
+    code: 3
+    docs: 3
+    infra: 1
 automation:
   mode: night-worker
   services:
@@ -33,7 +38,7 @@ automation:
     sns: 1
     recipe: 1
     todo: 1
-  "$reviewbot":
+  reviewbot:
     actors:
       - gemini-code-assist
       - coderabbitai
@@ -83,7 +88,7 @@ Current state: <%= issue.state %>
 - Do not invent extra scope, cleanup, or follow-up work unless explicitly requested by the issue.
 
 ## Service Boundary Rules
-This repository contains three independently developed services. Runtime service awareness uses these prefixes/labels and allows one active run per service, up to the global `max-concurrent: 3` limit.
+This repository contains three independently developed services. Runtime service awareness uses these prefixes/labels and allows one active run per service, up to the global `max-concurrent: 3` limit. The workflow also sets `concurrency-limits` so class-level throttles do not prevent cross-service parallelism.
 
 | Service | Issue Title Prefix | GitHub Label | Allowed Paths |
 | --- | --- | --- | --- |
