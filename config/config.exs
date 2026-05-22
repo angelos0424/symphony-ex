@@ -1,7 +1,11 @@
 import Config
 
+config :elixir, :time_zone_database, Tzdata.TimeZoneDatabase
+
 config :logger, :default_formatter,
   metadata: [
+    :automation_configured_mode,
+    :automation_effective_mode,
     :attempt,
     :call_id,
     :class,
