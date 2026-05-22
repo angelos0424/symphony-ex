@@ -29,7 +29,7 @@ orchestrator:
     docs: 3
     infra: 1
 automation:
-  mode: night-worker
+  mode: full-auto
   services:
     - post-manager
     - receipt-manager
@@ -44,8 +44,8 @@ automation:
       - coderabbitai
   full-auto:
     apply-review-feedback: true
-    auto-merge: false
-    promote-next-ready-to-todo: false
+    auto-merge: true
+    promote-next-ready-to-todo: true
     allow-no-checks: false
     merge-method: squash
     ready-state-name: Ready
@@ -114,10 +114,9 @@ Examples:
 - `[todo-manager] Add due date validation` -> work under `todo-manager/**`.
 
 ## Automation Mode
-- Configured mode is `night-worker`.
-- Default effective mode is `default` outside the night window.
-- Night window is `23:00`-`07:00` in `Asia/Seoul`; during this window effective mode is `full-auto`.
-- Full-auto may apply configured reviewbot feedback, but auto-merge and automatic Ready promotion are disabled by default.
+- Configured mode is `full-auto`.
+- Full-auto applies configured reviewbot feedback, can auto-merge passing PRs, and can promote the next Ready issue to Todo.
+- Guardrails remain enabled: PRs without checks are not merged automatically.
 - Reviewbot actors: `gemini-code-assist`, `coderabbitai`.
 
 ## GitHub/Project State Guidance
