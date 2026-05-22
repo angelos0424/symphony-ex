@@ -87,6 +87,15 @@ defmodule SymphonyEx.RuntimeSnapshotTest do
         }
       ],
       workflow_path: "/tmp/WORKFLOW.md",
+      automation_now: ~U[2026-03-30 23:30:00Z],
+      automation:
+        SymphonyEx.Automation.normalize(
+          mode: :night_worker,
+          night_worker: [
+            timezone: "Etc/UTC",
+            windows: [%{start: "23:00", end: "07:00"}]
+          ]
+        ),
       poll_interval_ms: 2_000,
       max_concurrent: 3,
       max_retries: 2,
@@ -169,7 +178,21 @@ defmodule SymphonyEx.RuntimeSnapshotTest do
              blocked_labels: ["blocked", "needs-human"],
              serialization_label_prefixes: ["scope:", "service:"],
              explicit_issue_identifier: "SYM-9",
-             workflow_path: "/tmp/WORKFLOW.md"
+             workflow_path: "/tmp/WORKFLOW.md",
+             automation: %{
+               configured_mode: :night_worker,
+               effective_mode: :full_auto,
+               night_worker: %{
+                 timezone: "Etc/UTC",
+                 active: true,
+                 in_window: true,
+                 mode_during_window: :full_auto,
+                 mode_outside_window: :default,
+                 windows: [
+                   %{start: "23:00", end: "07:00", start_minute: 1380, end_minute: 420}
+                 ]
+               }
+             }
            }
 
     assert Enum.map(snapshot.write_back_stages.recent, & &1.stage) == ["optional", "essential"]
@@ -254,6 +277,8 @@ defmodule SymphonyEx.RuntimeSnapshotTest do
       completed_issue_identifiers: MapSet.new(),
       completed: [],
       workflow_path: "/tmp/WORKFLOW.md",
+      automation_now: ~U[2026-03-30 00:00:00Z],
+      automation: SymphonyEx.Automation.default_config(),
       poll_interval_ms: 2_000,
       max_concurrent: 1,
       max_retries: 2,

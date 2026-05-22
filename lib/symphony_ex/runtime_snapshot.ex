@@ -6,6 +6,7 @@ defmodule SymphonyEx.RuntimeSnapshot do
   bounded payload shape to consume.
   """
 
+  alias SymphonyEx.Automation
   alias SymphonyEx.Domain.Issue
   alias SymphonyEx.{Observability, Orchestrator}
   alias SymphonyEx.RunEventLogger
@@ -120,7 +121,8 @@ defmodule SymphonyEx.RuntimeSnapshot do
         blocked_labels: state.blocked_labels |> MapSet.to_list() |> Enum.sort(),
         serialization_label_prefixes: Enum.sort(state.serialization_label_prefixes),
         explicit_issue_identifier: state.explicit_issue_identifier,
-        workflow_path: state.workflow_path
+        workflow_path: state.workflow_path,
+        automation: automation_status(state)
       },
       write_back_stages: observability.write_back_stages
     }
@@ -269,8 +271,15 @@ defmodule SymphonyEx.RuntimeSnapshot do
       blocked_labels: state.blocked_labels |> MapSet.to_list() |> Enum.sort(),
       serialization_label_prefixes: Enum.sort(state.serialization_label_prefixes),
       explicit_issue_identifier: state.explicit_issue_identifier,
-      workflow_path: state.workflow_path
+      workflow_path: state.workflow_path,
+      automation: automation_status(state)
     }
+  end
+
+  defp automation_status(state) do
+    state
+    |> Map.get(:automation, Automation.default_config())
+    |> Automation.mode_status(Map.get(state, :automation_now, DateTime.utc_now()))
   end
 
   defp observer_last_result(result) when is_map(result) do

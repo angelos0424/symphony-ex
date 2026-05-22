@@ -114,6 +114,28 @@ defmodule SymphonyEx.Automation do
     end
   end
 
+  @doc "Returns configured/effective automation mode details for status/debug output."
+  @spec mode_status(keyword(), DateTime.t()) :: map()
+  def mode_status(config, now \\ DateTime.utc_now()) do
+    configured_mode = Keyword.get(config, :mode, :default)
+    effective_mode = resolve_mode(config, now)
+    night_worker = Keyword.get(config, :night_worker, [])
+    night_worker_active? = configured_mode == :night_worker
+
+    %{
+      configured_mode: configured_mode,
+      effective_mode: effective_mode,
+      night_worker: %{
+        timezone: Keyword.get(night_worker, :timezone, "Etc/UTC"),
+        active: night_worker_active?,
+        in_window: night_worker_active? and in_any_window?(now, night_worker),
+        mode_during_window: Keyword.get(night_worker, :mode_during_window, :full_auto),
+        mode_outside_window: Keyword.get(night_worker, :mode_outside_window, :default),
+        windows: Enum.map(Keyword.get(night_worker, :windows, []), &window_status/1)
+      }
+    }
+  end
+
   @doc "Derives an issue service from configured service names."
   @spec issue_service(Issue.t(), keyword()) ::
           String.t() | nil | {:error, {:unknown_service, String.t()}}
@@ -334,8 +356,29 @@ defmodule SymphonyEx.Automation do
   defp local_datetime(now, timezone) do
     case DateTime.shift_zone(now, timezone) do
       {:ok, shifted} -> shifted
-      {:error, _reason} -> now
+      {:error, _reason} -> local_datetime_from_system_zoneinfo(now, timezone) || now
     end
+  end
+
+  defp local_datetime_from_system_zoneinfo(now, timezone) do
+    case System.cmd("date", ["+%Y-%m-%dT%H:%M:%S", "-d", DateTime.to_iso8601(now)],
+           env: [{"TZ", timezone}],
+           stderr_to_stdout: true
+         ) do
+      {output, 0} ->
+        output
+        |> String.trim()
+        |> NaiveDateTime.from_iso8601()
+        |> case do
+          {:ok, naive} -> DateTime.from_naive!(naive, "Etc/UTC")
+          {:error, _reason} -> nil
+        end
+
+      _other ->
+        nil
+    end
+  rescue
+    _ -> nil
   end
 
   defp in_window?(minute, start_minute, end_minute) when start_minute < end_minute do
@@ -352,6 +395,15 @@ defmodule SymphonyEx.Automation do
 
   defp window_value(window, key) when is_list(window) do
     Keyword.get(window, key) || Keyword.get(window, String.to_atom(to_string(key)))
+  end
+
+  defp window_status(window) do
+    %{
+      start: window_value(window, :start),
+      end: window_value(window, :end),
+      start_minute: window_value(window, :start_minute),
+      end_minute: window_value(window, :end_minute)
+    }
   end
 
   defp normalize_window(window) when is_map(window) do

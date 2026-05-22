@@ -23,6 +23,62 @@ defmodule SymphonyEx.AutomationTest do
     assert Automation.resolve_mode(config, ~U[2026-05-22 12:00:00Z]) == :default
   end
 
+  test "resolves same-day night-worker windows with configured timezone" do
+    config =
+      Automation.normalize(
+        mode: :night_worker,
+        night_worker: [
+          timezone: "Asia/Seoul",
+          windows: [%{start: "08:00", end: "10:00"}],
+          mode_during_window: :full_auto,
+          mode_outside_window: :default
+        ]
+      )
+
+    assert [%{start_minute: 480, end_minute: 600}] = config[:night_worker][:windows]
+    assert Automation.resolve_mode(config, ~U[2026-05-22 00:30:00Z]) == :full_auto
+    assert Automation.resolve_mode(config, ~U[2026-05-22 02:00:00Z]) == :default
+  end
+
+  test "resolves multiple night-worker windows" do
+    config =
+      Automation.normalize(
+        mode: :night_worker,
+        night_worker: [
+          timezone: "Etc/UTC",
+          windows: [%{start: "08:00", end: "09:00"}, %{start: "18:00", end: "19:00"}]
+        ]
+      )
+
+    assert Automation.resolve_mode(config, ~U[2026-05-22 08:30:00Z]) == :full_auto
+    assert Automation.resolve_mode(config, ~U[2026-05-22 18:30:00Z]) == :full_auto
+    assert Automation.resolve_mode(config, ~U[2026-05-22 12:00:00Z]) == :default
+  end
+
+  test "exposes configured and effective mode status" do
+    config =
+      Automation.normalize(
+        mode: :night_worker,
+        night_worker: [
+          timezone: "Etc/UTC",
+          windows: [%{start: "23:00", end: "07:00"}]
+        ]
+      )
+
+    assert Automation.mode_status(config, ~U[2026-05-22 23:30:00Z]) == %{
+             configured_mode: :night_worker,
+             effective_mode: :full_auto,
+             night_worker: %{
+               timezone: "Etc/UTC",
+               active: true,
+               in_window: true,
+               mode_during_window: :full_auto,
+               mode_outside_window: :default,
+               windows: [%{start: "23:00", end: "07:00", start_minute: 1380, end_minute: 420}]
+             }
+           }
+  end
+
   test "validates night-worker timezone names" do
     config =
       Automation.normalize(
@@ -35,6 +91,18 @@ defmodule SymphonyEx.AutomationTest do
 
     assert_raise ArgumentError, ~r/valid IANA timezone/, fn ->
       Automation.validate!(config)
+    end
+  end
+
+  test "validates night-worker time format" do
+    assert_raise ArgumentError, ~r/HH:MM/, fn ->
+      Automation.normalize(
+        mode: :night_worker,
+        night_worker: [
+          timezone: "Etc/UTC",
+          windows: [%{start: "25:00", end: "07:00"}]
+        ]
+      )
     end
   end
 

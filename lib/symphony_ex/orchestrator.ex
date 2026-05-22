@@ -514,6 +514,10 @@ defmodule SymphonyEx.Orchestrator do
                 class: classify_issue(issue),
                 dispatch_source: source,
                 dispatch_priority: dispatch_priority(issue, state),
+                automation_configured_mode:
+                  state.automation |> Automation.mode_status() |> Map.get(:configured_mode),
+                automation_effective_mode:
+                  state.automation |> Automation.mode_status() |> Map.get(:effective_mode),
                 conflict_keys:
                   issue_conflict_keys(issue, state) |> Logging.normalize_conflict_keys()
               })
