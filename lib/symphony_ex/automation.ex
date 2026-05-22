@@ -29,7 +29,10 @@ defmodule SymphonyEx.Automation do
     full_auto: [
       apply_review_feedback: false,
       auto_merge: false,
-      promote_next_ready_to_todo: false
+      promote_next_ready_to_todo: false,
+      allow_no_checks: false,
+      merge_method: :squash,
+      ready_state_name: "Ready"
     ],
     night_worker: [
       timezone: "Etc/UTC",
@@ -60,6 +63,7 @@ defmodule SymphonyEx.Automation do
     |> Keyword.put(:services_set, MapSet.new(services))
     |> Keyword.put(:service_concurrency, service_concurrency)
     |> Keyword.update(:reviewbot, @default[:reviewbot], &normalize_reviewbot/1)
+    |> Keyword.update(:full_auto, @default[:full_auto], &normalize_full_auto/1)
     |> Keyword.update(:night_worker, @default[:night_worker], &normalize_night_worker/1)
   end
 
@@ -203,6 +207,32 @@ defmodule SymphonyEx.Automation do
 
   defp normalize_reviewbot(actor) when is_binary(actor), do: normalize_reviewbot([actor])
   defp normalize_reviewbot(_opts), do: @default[:reviewbot]
+
+  defp normalize_full_auto(opts) when is_list(opts) do
+    opts = Keyword.merge(@default[:full_auto], opts)
+
+    opts
+    |> Keyword.put(:merge_method, normalize_merge_method(Keyword.get(opts, :merge_method)))
+    |> Keyword.put(
+      :ready_state_name,
+      opts |> Keyword.get(:ready_state_name, "Ready") |> to_string() |> String.trim()
+    )
+  end
+
+  defp normalize_full_auto(%{} = opts), do: opts |> Enum.into([]) |> normalize_full_auto()
+  defp normalize_full_auto(_opts), do: @default[:full_auto]
+
+  defp normalize_merge_method(method) when method in [:merge, :squash, :rebase], do: method
+
+  defp normalize_merge_method(method) when is_binary(method) do
+    case method |> String.trim() |> String.downcase() do
+      "merge" -> :merge
+      "rebase" -> :rebase
+      _other -> :squash
+    end
+  end
+
+  defp normalize_merge_method(_method), do: :squash
 
   defp normalize_reviewbot_key(key) when key in [:actors, :actor_logins, :logins], do: key
 

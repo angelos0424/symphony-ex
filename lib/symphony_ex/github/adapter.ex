@@ -5,6 +5,7 @@ defmodule SymphonyEx.GitHub.Adapter do
 
   @behaviour SymphonyEx.Tracker
 
+  alias SymphonyEx.Automation
   alias SymphonyEx.Domain.Issue
   alias SymphonyEx.GitHub.Client
   alias SymphonyEx.GitHub.IssueBodyMetadata
@@ -20,6 +21,8 @@ defmodule SymphonyEx.GitHub.Adapter do
   @review_task_running_reaction "rocket"
   @review_task_completion_reaction "+1"
   @review_task_blocked_reaction "-1"
+  @full_auto_marker "<!-- symphony:full-auto -->"
+  @promote_next_marker "<!-- symphony:promote-next -->"
 
   @spec fetch_candidate_issues(keyword()) :: {:ok, [Issue.t()]} | {:error, term()}
   def fetch_candidate_issues(opts) do
@@ -1100,9 +1103,298 @@ defmodule SymphonyEx.GitHub.Adapter do
   @spec sync_optional_write_back(Issue.t(), map(), keyword()) :: :ok | {:error, atom(), term()}
   defp sync_optional_write_back(%Issue{} = issue, attrs, opts) do
     with :ok <- maybe_sync_additional_project_fields(issue, attrs, opts),
-         :ok <- sync_write_back_automation(issue, attrs, opts) do
+         :ok <- sync_write_back_automation(issue, attrs, opts),
+         :ok <- maybe_run_full_auto_post_review(issue, attrs, opts) do
       :ok
     end
+  end
+
+  @spec maybe_run_full_auto_post_review(Issue.t(), map(), keyword()) ::
+          :ok | {:error, atom(), term()}
+  defp maybe_run_full_auto_post_review(%Issue{} = issue, attrs, opts) do
+    automation = Keyword.get(opts, :automation, [])
+    full_auto = Keyword.get(automation, :full_auto, [])
+
+    cond do
+      Map.get(attrs, :status) != :released or Map.get(attrs, :result) != :success ->
+        :ok
+
+      Automation.resolve_mode(automation) != :full_auto ->
+        :ok
+
+      not Keyword.get(full_auto, :auto_merge, false) and
+          not Keyword.get(full_auto, :promote_next_ready_to_todo, false) ->
+        :ok
+
+      is_nil(issue.target_pr) ->
+        comment_full_auto_status(issue, "blocked", ["Target-PR metadata is required."], opts)
+
+      true ->
+        case maybe_auto_merge_pr(issue, opts, full_auto) do
+          {:ok, :merged} -> maybe_promote_next_ready_to_todo(issue, opts, full_auto)
+          {:ok, :already_merged} -> maybe_promote_next_ready_to_todo(issue, opts, full_auto)
+          {:ok, :skipped} -> :ok
+          {:error, stage, reason} -> {:error, stage, reason}
+        end
+    end
+  end
+
+  defp maybe_auto_merge_pr(%Issue{} = issue, opts, full_auto) do
+    if Keyword.get(full_auto, :auto_merge, false) do
+      with {:ok, pr} <- Client.fetch_pull_request(issue.target_pr, opts),
+           :ok <- validate_pr_merge_guardrails(issue, pr, opts, full_auto),
+           {:ok, _merge} <-
+             Client.merge_pull_request(issue.target_pr, opts,
+               merge_method: Keyword.get(full_auto, :merge_method, :squash)
+             ) do
+        comment_full_auto_status(issue, "merged", ["PR ##{issue.target_pr} merged."], opts)
+        {:ok, :merged}
+      else
+        {:already_merged, pr} ->
+          comment_full_auto_status(
+            issue,
+            "already_merged",
+            ["PR ##{pr["number"]} was already merged."],
+            opts
+          )
+
+          {:ok, :already_merged}
+
+        {:blocked, reasons} ->
+          comment_full_auto_status(issue, "blocked", reasons, opts)
+          {:ok, :skipped}
+
+        {:error, reason} ->
+          {:error, :full_auto_merge_failed, reason}
+      end
+    else
+      {:ok, :already_merged}
+    end
+  end
+
+  defp validate_pr_merge_guardrails(%Issue{} = issue, pr, opts, full_auto) do
+    cond do
+      truthy?(pr["merged"]) ->
+        {:already_merged, pr}
+
+      pr["state"] == "closed" ->
+        {:blocked, ["PR ##{issue.target_pr} is closed without merged=true."]}
+
+      truthy?(pr["draft"]) ->
+        {:blocked, ["PR ##{issue.target_pr} is draft."]}
+
+      pr["mergeable_state"] not in [nil, "clean"] ->
+        {:blocked, ["PR mergeable_state is #{inspect(pr["mergeable_state"])}."]}
+
+      issue.target_branch && pr_head_ref(pr) != issue.target_branch ->
+        {:blocked,
+         [
+           "PR head branch #{inspect(pr_head_ref(pr))} does not match Target-Branch #{inspect(issue.target_branch)}."
+         ]}
+
+      true ->
+        with :ok <- guard_no_human_requested_changes(issue, opts),
+             :ok <- guard_checks_pass(pr_head_sha(pr), opts, full_auto) do
+          :ok
+        end
+    end
+  end
+
+  defp guard_no_human_requested_changes(%Issue{} = issue, opts) do
+    reviewbot_actors = configured_reviewbot_actors(opts)
+
+    case Client.fetch_pull_request_reviews(issue.target_pr, opts) do
+      {:ok, reviews} ->
+        blockers =
+          reviews
+          |> Enum.reject(&bot_review?/1)
+          |> Enum.reject(&(review_author_login(&1) in reviewbot_actors))
+          |> latest_review_by_author()
+          |> Enum.filter(fn {_login, review} ->
+            String.upcase(to_string(review["state"])) == "CHANGES_REQUESTED"
+          end)
+
+        case blockers do
+          [] ->
+            :ok
+
+          values ->
+            {:blocked,
+             [
+               "Human reviewer requested changes: #{values |> Enum.map(&elem(&1, 0)) |> Enum.join(", ")}."
+             ]}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp guard_checks_pass(nil, _opts, full_auto) do
+    if Keyword.get(full_auto, :allow_no_checks, false),
+      do: :ok,
+      else: {:blocked, ["PR head SHA is missing, so checks cannot be verified."]}
+  end
+
+  defp guard_checks_pass(sha, opts, full_auto) do
+    with {:ok, status} <- Client.fetch_commit_status(sha, opts),
+         {:ok, check_runs} <- Client.fetch_check_runs(sha, opts) do
+      combined_state = status["state"]
+      runs = List.wrap(check_runs["check_runs"])
+      status_contexts = List.wrap(status["statuses"])
+      checks_present? = status_contexts != [] or runs != []
+
+      cond do
+        not checks_present? and Keyword.get(full_auto, :allow_no_checks, false) ->
+          :ok
+
+        not checks_present? ->
+          {:blocked, ["No status checks found and allow_no_checks is false."]}
+
+        combined_state not in [nil, "success"] ->
+          {:blocked, ["Combined commit status is #{inspect(combined_state)}."]}
+
+        failing = Enum.find(runs, &(not check_run_passed?(&1))) ->
+          {:blocked, ["Check run #{inspect(failing["name"])} is not passing."]}
+
+        true ->
+          :ok
+      end
+    end
+  end
+
+  defp maybe_promote_next_ready_to_todo(%Issue{} = issue, opts, full_auto) do
+    if Keyword.get(full_auto, :promote_next_ready_to_todo, false) do
+      with :ok <- verify_issue_closed_or_done(issue, opts),
+           {:ok, comments} <- Client.fetch_issue_comments(issue.identifier, opts),
+           false <- promotion_already_recorded?(comments),
+           {:ok, items} <-
+             Client.list_project_items(Keyword.put(opts, :include_issue_body, false)) do
+        cond do
+          active_todo_exists?(items) ->
+            comment_promotion_status(issue, "skipped", ["Active Todo already exists."], opts)
+
+          item =
+              next_ready_project_item(items, Keyword.get(full_auto, :ready_state_name, "Ready")) ->
+            with :ok <- sync_project_field(item, "Status", "Todo", opts) do
+              promoted = item |> Map.get("content", %{}) |> Map.get("number")
+
+              comment_promotion_status(
+                issue,
+                "promoted",
+                ["Promoted issue ##{promoted} to Todo."],
+                opts
+              )
+            end
+
+          true ->
+            comment_promotion_status(issue, "skipped", ["No Ready issue found."], opts)
+        end
+      else
+        true -> :ok
+        {:blocked, reasons} -> comment_promotion_status(issue, "blocked", reasons, opts)
+        {:error, reason} -> {:error, :full_auto_promotion_failed, reason}
+      end
+    else
+      :ok
+    end
+  end
+
+  defp verify_issue_closed_or_done(%Issue{} = issue, opts) do
+    with {:ok, latest} <- Client.fetch_issue(issue.identifier, opts) do
+      cond do
+        latest && String.downcase(to_string(latest["state"])) == "closed" ->
+          :ok
+
+        Keyword.has_key?(opts, :project_number) ->
+          case fetch_project_item(issue, opts) do
+            {:ok, item} ->
+              if project_item_status(item) == "Done",
+                do: :ok,
+                else: {:blocked, ["Linked issue is not closed and Project status is not Done."]}
+
+            {:error, _reason} ->
+              {:blocked, ["Linked issue is not closed and Project item could not be verified."]}
+          end
+
+        true ->
+          {:blocked, ["Linked issue is not closed."]}
+      end
+    end
+  end
+
+  defp active_todo_exists?(items) do
+    Enum.any?(items, fn item ->
+      issue = Map.get(item, "content", %{})
+      is_map(issue) and issue_open?(issue) and project_item_status(item) == "Todo"
+    end)
+  end
+
+  defp next_ready_project_item(items, ready_state_name) do
+    items
+    |> Enum.filter(fn item ->
+      issue = Map.get(item, "content", %{})
+      is_map(issue) and issue_open?(issue) and project_item_status(item) == ready_state_name
+    end)
+    |> Enum.sort_by(fn item -> get_in(item, ["content", "number"]) || 0 end)
+    |> List.first()
+  end
+
+  defp promotion_already_recorded?(comments) do
+    Enum.any?(comments, fn comment ->
+      String.contains?(to_string(comment["body"]), @promote_next_marker)
+    end)
+  end
+
+  defp comment_full_auto_status(issue, status, lines, opts) do
+    body =
+      Enum.join(
+        [@full_auto_marker, "full_auto_status: #{status}" | Enum.map(lines, &"- #{&1}")],
+        "\n"
+      )
+
+    create_comment(issue.identifier, body, opts)
+    :ok
+  end
+
+  defp comment_promotion_status(issue, status, lines, opts) do
+    body =
+      Enum.join(
+        [@promote_next_marker, "promotion_status: #{status}" | Enum.map(lines, &"- #{&1}")],
+        "\n"
+      )
+
+    create_comment(issue.identifier, body, opts)
+    :ok
+  end
+
+  defp pr_head_ref(pr), do: get_in(pr, ["head", "ref"])
+  defp pr_head_sha(pr), do: get_in(pr, ["head", "sha"])
+  defp truthy?(value), do: value in [true, "true"]
+
+  defp bot_review?(review) do
+    user = Map.get(review, "user", %{}) || %{}
+    String.downcase(to_string(user["type"])) == "bot"
+  end
+
+  defp review_author_login(review),
+    do:
+      review
+      |> Map.get("user", %{})
+      |> Kernel.||(%{})
+      |> Map.get("login")
+      |> to_string()
+      |> String.downcase()
+
+  defp latest_review_by_author(reviews) do
+    Enum.reduce(reviews, %{}, fn review, acc ->
+      login = review_author_login(review)
+      if login == "", do: acc, else: Map.put(acc, login, review)
+    end)
+  end
+
+  defp check_run_passed?(run) do
+    run["status"] == "completed" and run["conclusion"] in ["success", "neutral", "skipped"]
   end
 
   @spec maybe_update_issue_state(Issue.t(), map(), keyword()) :: :ok | {:error, term()}

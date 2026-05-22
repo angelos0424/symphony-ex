@@ -62,7 +62,13 @@ defmodule SymphonyEx.Config.Schema do
     keys: [
       apply_review_feedback: [type: :boolean, default: false],
       auto_merge: [type: :boolean, default: false],
-      promote_next_ready_to_todo: [type: :boolean, default: false]
+      promote_next_ready_to_todo: [type: :boolean, default: false],
+      allow_no_checks: [type: :boolean, default: false],
+      merge_method: [
+        type: {:or, [{:in, [:merge, :squash, :rebase]}, {:in, ["merge", "squash", "rebase"]}]},
+        default: :squash
+      ],
+      ready_state_name: [type: :string, default: "Ready"]
     ]
   ]
 

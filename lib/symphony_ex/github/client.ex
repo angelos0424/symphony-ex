@@ -132,6 +132,35 @@ defmodule SymphonyEx.GitHub.Client do
     rest(:get, "/repos/#{owner}/#{repo}/pulls/#{pull_number}", opts)
   end
 
+  @spec merge_pull_request(String.t() | pos_integer(), keyword(), keyword()) ::
+          {:ok, map()} | {:error, term()}
+  def merge_pull_request(number_or_identifier, opts, merge_opts \\ []) do
+    owner = Keyword.fetch!(opts, :owner)
+    repo = Keyword.fetch!(opts, :repo)
+    pull_number = normalize_issue_number(number_or_identifier)
+    merge_method = merge_opts |> Keyword.get(:merge_method, :squash) |> to_string()
+
+    rest(:put, "/repos/#{owner}/#{repo}/pulls/#{pull_number}/merge", opts,
+      json: %{merge_method: merge_method}
+    )
+  end
+
+  @spec fetch_commit_status(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def fetch_commit_status(ref, opts) when is_binary(ref) do
+    owner = Keyword.fetch!(opts, :owner)
+    repo = Keyword.fetch!(opts, :repo)
+
+    rest(:get, "/repos/#{owner}/#{repo}/commits/#{URI.encode(ref)}/status", opts)
+  end
+
+  @spec fetch_check_runs(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def fetch_check_runs(ref, opts) when is_binary(ref) do
+    owner = Keyword.fetch!(opts, :owner)
+    repo = Keyword.fetch!(opts, :repo)
+
+    rest(:get, "/repos/#{owner}/#{repo}/commits/#{URI.encode(ref)}/check-runs", opts)
+  end
+
   @spec fetch_pull_request_reviews(String.t() | pos_integer(), keyword()) ::
           {:ok, [comment_map()]} | {:error, term()}
   def fetch_pull_request_reviews(number_or_identifier, opts) do
