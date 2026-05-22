@@ -28,6 +28,11 @@ defmodule SymphonyExTest do
         max-concurrent: 3
         max-retries: 4
         backoff-base-ms: 2500
+        concurrency-limits:
+          default: 3
+          code: 3
+          docs: 2
+          infra: 1
       ---
 
       # Workflow body
@@ -52,6 +57,7 @@ defmodule SymphonyExTest do
         assert opts[:max_concurrent] == 3
         assert opts[:max_retries] == 4
         assert opts[:retry_backoff_ms] == 2500
+        assert Map.new(opts[:concurrency_limits]) == %{default: 3, code: 3, docs: 2, infra: 1}
       end)
     end
 

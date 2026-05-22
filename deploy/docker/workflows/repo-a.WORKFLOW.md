@@ -20,9 +20,42 @@ workspace:
   source-cache-root: /srv/symphony/repo-a/source-cache
 orchestrator:
   poll-interval-ms: 60000
-  max-concurrent: 1
+  max-concurrent: 3
   max-retries: 3
   backoff-base-ms: 10000
+  concurrency-limits:
+    default: 3
+    code: 3
+    docs: 3
+    infra: 1
+automation:
+  mode: night-worker
+  services:
+    - sns
+    - recipe
+    - todo
+  service-concurrency:
+    sns: 1
+    recipe: 1
+    todo: 1
+  reviewbot:
+    actors:
+      - gemini-code-assist
+      - coderabbitai
+  full-auto:
+    apply-review-feedback: true
+    auto-merge: false
+    promote-next-ready-to-todo: false
+    allow-no-checks: false
+    merge-method: squash
+    ready-state-name: Ready
+  night-worker:
+    timezone: Asia/Seoul
+    windows:
+      - start: "23:00"
+        end: "07:00"
+    mode-during-window: full-auto
+    mode-outside-window: default
 codex:
   command: codex app-server
   thread-sandbox: dangerFullAccess
@@ -55,7 +88,7 @@ Current state: <%= issue.state %>
 - Do not invent extra scope, cleanup, or follow-up work unless explicitly requested by the issue.
 
 ## Service Boundary Rules
-This repository contains three independently developed services. Service isolation is folder-only.
+This repository contains three independently developed services. Runtime service awareness uses these prefixes/labels and allows one active run per service, up to the global `max-concurrent: 3` limit. The workflow also sets `concurrency-limits` so class-level throttles do not prevent cross-service parallelism.
 
 | Service | Issue Title Prefix | GitHub Label | Allowed Paths |
 | --- | --- | --- | --- |
@@ -79,6 +112,13 @@ Examples:
 - `[sns] Implement post list API` -> work under `sns/**`.
 - `[recipe] Add recipe detail page` -> work under `recipe/**`.
 - `[todo] Add due date validation` -> work under `todo/**`.
+
+## Automation Mode
+- Configured mode is `night-worker`.
+- Default effective mode is `default` outside the night window.
+- Night window is `23:00`-`07:00` in `Asia/Seoul`; during this window effective mode is `full-auto`.
+- Full-auto may apply configured reviewbot feedback, but auto-merge and automatic Ready promotion are disabled by default.
+- Reviewbot actors: `gemini-code-assist`, `coderabbitai`.
 
 ## GitHub/Project State Guidance
 - Treat issues in `Todo` and `In Progress` as active.

@@ -56,7 +56,8 @@ defmodule SymphonyEx do
       poll_interval_ms: Keyword.get(orchestrator_opts, :poll_interval_ms),
       max_concurrent: Keyword.get(orchestrator_opts, :max_concurrent),
       max_retries: Keyword.get(orchestrator_opts, :max_retries),
-      retry_backoff_ms: Keyword.get(orchestrator_opts, :backoff_base_ms)
+      retry_backoff_ms: Keyword.get(orchestrator_opts, :backoff_base_ms),
+      concurrency_limits: Keyword.get(orchestrator_opts, :concurrency_limits)
     ]
     |> Enum.reject(fn {_key, value} -> is_nil(value) end)
   end
