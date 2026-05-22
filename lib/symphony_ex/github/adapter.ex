@@ -1126,11 +1126,8 @@ defmodule SymphonyEx.GitHub.Adapter do
           not Keyword.get(full_auto, :promote_next_ready_to_todo, false) ->
         :ok
 
-      is_nil(issue.target_pr) ->
-        comment_full_auto_status(issue, "blocked", ["Target-PR metadata is required."], opts)
-
       true ->
-        case maybe_auto_merge_pr(issue, opts, full_auto) do
+        case maybe_auto_merge_pr(issue, attrs, opts, full_auto) do
           {:ok, :merged} -> maybe_promote_next_ready_to_todo(issue, opts, full_auto)
           {:ok, :already_merged} -> maybe_promote_next_ready_to_todo(issue, opts, full_auto)
           {:ok, :skipped} -> :ok
@@ -1139,17 +1136,30 @@ defmodule SymphonyEx.GitHub.Adapter do
     end
   end
 
-  defp maybe_auto_merge_pr(%Issue{} = issue, opts, full_auto) do
+  defp maybe_auto_merge_pr(%Issue{} = issue, attrs, opts, full_auto) do
+    target_pr = resolve_target_pr(issue, attrs, opts)
+
     if Keyword.get(full_auto, :auto_merge, false) do
-      with {:ok, pr} <- Client.fetch_pull_request(issue.target_pr, opts),
+      with {:ok, target_pr} <- require_target_pr(target_pr),
+           {:ok, pr} <- Client.fetch_pull_request(target_pr, opts),
            :ok <- validate_pr_merge_guardrails(issue, pr, opts, full_auto),
            {:ok, _merge} <-
-             Client.merge_pull_request(issue.target_pr, opts,
+             Client.merge_pull_request(target_pr, opts,
                merge_method: Keyword.get(full_auto, :merge_method, :squash)
              ) do
-        comment_full_auto_status(issue, "merged", ["PR ##{issue.target_pr} merged."], opts)
+        comment_full_auto_status(
+          issue,
+          "merged",
+          ["PR ##{pr["number"] || target_pr} merged."],
+          opts
+        )
+
         {:ok, :merged}
       else
+        {:blocked, reasons} ->
+          comment_full_auto_status(issue, "blocked", reasons, opts)
+          {:ok, :skipped}
+
         {:already_merged, pr} ->
           comment_full_auto_status(
             issue,
@@ -1160,10 +1170,6 @@ defmodule SymphonyEx.GitHub.Adapter do
 
           {:ok, :already_merged}
 
-        {:blocked, reasons} ->
-          comment_full_auto_status(issue, "blocked", reasons, opts)
-          {:ok, :skipped}
-
         {:error, reason} ->
           {:error, :full_auto_merge_failed, reason}
       end
@@ -1172,16 +1178,33 @@ defmodule SymphonyEx.GitHub.Adapter do
     end
   end
 
+  defp resolve_target_pr(%Issue{target_pr: target_pr}, _attrs, _opts) when is_integer(target_pr),
+    do: target_pr
+
+  defp resolve_target_pr(%Issue{} = issue, attrs, opts) do
+    issue
+    |> latest_related_pr(attrs, opts)
+    |> case do
+      %{} = pr -> pr["number"]
+      _other -> nil
+    end
+  end
+
+  defp require_target_pr(target_pr) when is_integer(target_pr), do: {:ok, target_pr}
+  defp require_target_pr(_target_pr), do: {:blocked, ["Target-PR metadata is required."]}
+
   defp validate_pr_merge_guardrails(%Issue{} = issue, pr, opts, full_auto) do
+    pr_number = pr["number"] || issue.target_pr
+
     cond do
       truthy?(pr["merged"]) ->
         {:already_merged, pr}
 
       pr["state"] == "closed" ->
-        {:blocked, ["PR ##{issue.target_pr} is closed without merged=true."]}
+        {:blocked, ["PR ##{pr_number} is closed without merged=true."]}
 
       truthy?(pr["draft"]) ->
-        {:blocked, ["PR ##{issue.target_pr} is draft."]}
+        {:blocked, ["PR ##{pr_number} is draft."]}
 
       pr["mergeable_state"] not in [nil, "clean"] ->
         {:blocked, ["PR mergeable_state is #{inspect(pr["mergeable_state"])}."]}
@@ -1193,17 +1216,17 @@ defmodule SymphonyEx.GitHub.Adapter do
          ]}
 
       true ->
-        with :ok <- guard_no_human_requested_changes(issue, opts),
+        with :ok <- guard_no_human_requested_changes(pr_number, opts),
              :ok <- guard_checks_pass(pr_head_sha(pr), opts, full_auto) do
           :ok
         end
     end
   end
 
-  defp guard_no_human_requested_changes(%Issue{} = issue, opts) do
+  defp guard_no_human_requested_changes(pr_number, opts) do
     reviewbot_actors = configured_reviewbot_actors(opts)
 
-    case Client.fetch_pull_request_reviews(issue.target_pr, opts) do
+    case Client.fetch_pull_request_reviews(pr_number, opts) do
       {:ok, reviews} ->
         blockers =
           reviews

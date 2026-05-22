@@ -2339,6 +2339,39 @@ defmodule SymphonyEx.GitHub.AdapterTest do
            end)
   end
 
+  test "full-auto resolves related PR when issue target_pr metadata is missing" do
+    issue = %{
+      full_auto_issue()
+      | target_pr: nil,
+        description: "Service: app\nPaths: lib/**\nTarget-Branch: feat/full-auto"
+    }
+
+    test_pid = self()
+
+    request_fun = fn request ->
+      send(test_pid, {:github_request, request})
+      {:ok, %Req.Response{status: 200, body: full_auto_response(request)}}
+    end
+
+    opts = full_auto_opts(request_fun, full_auto: [auto_merge: true, allow_no_checks: true])
+
+    assert {:ok, _response} =
+             Adapter.write_run_record(
+               issue,
+               %{status: :released, result: :success, attempt: 1},
+               opts
+             )
+
+    requests = collect_pending_requests()
+    assert Enum.any?(requests, &match_request?(&1, :get, "/repos/example/repo/pulls"))
+    assert Enum.any?(requests, &match_request?(&1, :put, "/repos/example/repo/pulls/5/merge"))
+
+    assert Enum.any?(requests, fn request ->
+             body = get_in(request.options, [:json, :body])
+             request.method == :post and is_binary(body) and body =~ "full_auto_status: merged"
+           end)
+  end
+
   test "full-auto blocks merge when guardrails fail" do
     issue = full_auto_issue()
     test_pid = self()
