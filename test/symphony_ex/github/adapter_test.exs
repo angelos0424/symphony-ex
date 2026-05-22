@@ -2309,6 +2309,399 @@ defmodule SymphonyEx.GitHub.AdapterTest do
                     }}
   end
 
+  test "full-auto merges clean PR when guardrails pass" do
+    issue = full_auto_issue()
+    test_pid = self()
+
+    request_fun = fn request ->
+      send(test_pid, {:github_request, request})
+      {:ok, %Req.Response{status: 200, body: full_auto_response(request)}}
+    end
+
+    opts = full_auto_opts(request_fun, full_auto: [auto_merge: true, allow_no_checks: true])
+
+    assert {:ok, _response} =
+             Adapter.write_run_record(
+               issue,
+               %{status: :released, result: :success, attempt: 1},
+               opts
+             )
+
+    requests = collect_pending_requests()
+    assert Enum.any?(requests, &match_request?(&1, :put, "/repos/example/repo/pulls/5/merge"))
+
+    assert Enum.any?(requests, fn request ->
+             body = get_in(request.options, [:json, :body])
+
+             request.method == :post and is_binary(body) and
+               String.ends_with?(to_string(request.url), "/repos/example/repo/issues/12/comments") and
+               body =~ "full_auto_status: merged"
+           end)
+  end
+
+  test "full-auto resolves related PR when issue target_pr metadata is missing" do
+    issue = %{
+      full_auto_issue()
+      | target_pr: nil,
+        description: "Service: app\nPaths: lib/**\nTarget-Branch: feat/full-auto"
+    }
+
+    test_pid = self()
+
+    request_fun = fn request ->
+      send(test_pid, {:github_request, request})
+      {:ok, %Req.Response{status: 200, body: full_auto_response(request)}}
+    end
+
+    opts = full_auto_opts(request_fun, full_auto: [auto_merge: true, allow_no_checks: true])
+
+    assert {:ok, _response} =
+             Adapter.write_run_record(
+               issue,
+               %{status: :released, result: :success, attempt: 1},
+               opts
+             )
+
+    requests = collect_pending_requests()
+    assert Enum.any?(requests, &match_request?(&1, :get, "/repos/example/repo/pulls"))
+    assert Enum.any?(requests, &match_request?(&1, :put, "/repos/example/repo/pulls/5/merge"))
+
+    assert Enum.any?(requests, fn request ->
+             body = get_in(request.options, [:json, :body])
+             request.method == :post and is_binary(body) and body =~ "full_auto_status: merged"
+           end)
+  end
+
+  test "full-auto blocks merge when guardrails fail" do
+    issue = full_auto_issue()
+    test_pid = self()
+
+    request_fun = fn request ->
+      send(test_pid, {:github_request, request})
+
+      body =
+        if match_request?(request, :get, "/repos/example/repo/pulls/5") do
+          clean_pr_response(%{"draft" => true})
+        else
+          full_auto_response(request)
+        end
+
+      {:ok, %Req.Response{status: 200, body: body}}
+    end
+
+    opts = full_auto_opts(request_fun, full_auto: [auto_merge: true, allow_no_checks: true])
+
+    assert {:ok, _response} =
+             Adapter.write_run_record(
+               issue,
+               %{status: :released, result: :success, attempt: 1},
+               opts
+             )
+
+    requests = collect_pending_requests()
+    refute Enum.any?(requests, &match_request?(&1, :put, "/repos/example/repo/pulls/5/merge"))
+
+    assert Enum.any?(requests, fn request ->
+             body = get_in(request.options, [:json, :body])
+
+             request.method == :post and is_binary(body) and
+               body =~ "full_auto_status: blocked" and body =~ "draft"
+           end)
+  end
+
+  test "full-auto promotes next Ready issue when no active Todo exists" do
+    issue = full_auto_issue()
+    test_pid = self()
+
+    request_fun = fn request ->
+      send(test_pid, {:github_request, request})
+      {:ok, %Req.Response{status: 200, body: promotion_response(request, :ready_only)}}
+    end
+
+    opts =
+      full_auto_opts(request_fun,
+        project_number: 7,
+        full_auto: [promote_next_ready_to_todo: true]
+      )
+
+    assert {:ok, _response} =
+             Adapter.write_run_record(
+               issue,
+               %{status: :released, result: :success, attempt: 1},
+               opts
+             )
+
+    requests = collect_pending_requests()
+
+    assert Enum.any?(requests, fn request ->
+             request.method == :post and
+               to_string(request.url) == "https://api.github.com/graphql" and
+               get_in(request.options, [:json, "query"]) =~ "updateProjectV2ItemFieldValue" and
+               get_in(request.options, [:json, "variables", "itemId"]) == "PVTI_ready"
+           end)
+
+    assert Enum.any?(requests, fn request ->
+             body = get_in(request.options, [:json, :body])
+
+             request.method == :post and is_binary(body) and
+               body =~ "promotion_status: promoted" and body =~ "#13"
+           end)
+  end
+
+  test "full-auto does not promote when active Todo exists" do
+    issue = full_auto_issue()
+    test_pid = self()
+
+    request_fun = fn request ->
+      send(test_pid, {:github_request, request})
+      {:ok, %Req.Response{status: 200, body: promotion_response(request, :active_todo)}}
+    end
+
+    opts =
+      full_auto_opts(request_fun,
+        project_number: 7,
+        full_auto: [promote_next_ready_to_todo: true]
+      )
+
+    assert {:ok, _response} =
+             Adapter.write_run_record(
+               issue,
+               %{status: :released, result: :success, attempt: 1},
+               opts
+             )
+
+    requests = collect_pending_requests()
+
+    refute Enum.any?(requests, fn request ->
+             request.method == :post and
+               to_string(request.url) == "https://api.github.com/graphql" and
+               get_in(request.options, [:json, "query"]) =~ "updateProjectV2ItemFieldValue"
+           end)
+
+    assert Enum.any?(requests, fn request ->
+             body = get_in(request.options, [:json, :body])
+
+             request.method == :post and is_binary(body) and
+               body =~ "Active Todo already exists"
+           end)
+  end
+
+  test "full-auto does not duplicate next issue promotion" do
+    issue = full_auto_issue()
+    test_pid = self()
+
+    request_fun = fn request ->
+      send(test_pid, {:github_request, request})
+      {:ok, %Req.Response{status: 200, body: promotion_response(request, :already_promoted)}}
+    end
+
+    opts =
+      full_auto_opts(request_fun,
+        project_number: 7,
+        full_auto: [promote_next_ready_to_todo: true]
+      )
+
+    assert {:ok, _response} =
+             Adapter.write_run_record(
+               issue,
+               %{status: :released, result: :success, attempt: 1},
+               opts
+             )
+
+    requests = collect_pending_requests()
+
+    refute Enum.any?(requests, fn request ->
+             request.method == :post and
+               to_string(request.url) == "https://api.github.com/graphql" and
+               get_in(request.options, [:json, "query"]) =~ "updateProjectV2ItemFieldValue"
+           end)
+  end
+
+  defp full_auto_issue do
+    %Issue{
+      id: "I_12",
+      identifier: "12",
+      title: "full-auto",
+      description: "Service: app\nPaths: lib/**\nTarget-PR: 5\nTarget-Branch: feat/full-auto",
+      state: "In Review",
+      target_pr: 5,
+      target_branch: "feat/full-auto"
+    }
+  end
+
+  defp full_auto_opts(request_fun, extra) do
+    full_auto = Keyword.get(extra, :full_auto, [])
+
+    [
+      api_key: "gh-token",
+      owner: "example",
+      repo: "repo",
+      request_fun: request_fun,
+      write_back: [enabled: true, lifecycle_comments: false],
+      automation: [
+        mode: :full_auto,
+        full_auto:
+          Keyword.merge(
+            [
+              apply_review_feedback: false,
+              auto_merge: false,
+              promote_next_ready_to_todo: false,
+              allow_no_checks: false,
+              merge_method: :squash,
+              ready_state_name: "Ready"
+            ],
+            full_auto
+          ),
+        reviewbot: [actors: [], actors_set: MapSet.new()]
+      ]
+    ]
+    |> Keyword.merge(Keyword.drop(extra, [:full_auto]))
+  end
+
+  defp full_auto_response(request) do
+    cond do
+      match_request?(request, :get, "/repos/example/repo/issues/12") ->
+        %{"number" => 12, "body" => "Service: app\nPaths: lib/**", "state" => "open"}
+
+      match_request?(request, :get, "/repos/example/repo/pulls") ->
+        [clean_pr_response()]
+
+      match_request?(request, :get, "/repos/example/repo/pulls/5") ->
+        clean_pr_response()
+
+      match_request?(request, :get, "/repos/example/repo/pulls/5/reviews") ->
+        []
+
+      match_request?(request, :get, "/repos/example/repo/commits/abc123/status") ->
+        %{"state" => "success", "statuses" => [%{"state" => "success"}]}
+
+      match_request?(request, :get, "/repos/example/repo/commits/abc123/check-runs") ->
+        %{"check_runs" => [%{"name" => "ci", "status" => "completed", "conclusion" => "success"}]}
+
+      match_request?(request, :put, "/repos/example/repo/pulls/5/merge") ->
+        %{"merged" => true}
+
+      true ->
+        %{}
+    end
+  end
+
+  defp promotion_response(request, mode) do
+    cond do
+      match_request?(request, :get, "/repos/example/repo/issues/12/comments") ->
+        if mode == :already_promoted do
+          [%{"body" => "<!-- symphony:promote-next -->\npromotion_status: promoted"}]
+        else
+          []
+        end
+
+      match_request?(request, :post, "/graphql") ->
+        query = get_in(request.options, [:json, "query"])
+
+        if query =~ "updateProjectV2ItemFieldValue" do
+          %{
+            "data" => %{
+              "updateProjectV2ItemFieldValue" => %{"projectV2Item" => %{"id" => "PVTI_ready"}}
+            }
+          }
+        else
+          project_items_response_for_promotion(mode)
+        end
+
+      true ->
+        base_promotion_response(request)
+    end
+  end
+
+  defp base_promotion_response(request) do
+    cond do
+      match_request?(request, :get, "/repos/example/repo/issues/12") ->
+        %{"number" => 12, "body" => "Service: app\nPaths: lib/**", "state" => "closed"}
+
+      match_request?(request, :get, "/repos/example/repo/pulls") ->
+        []
+
+      true ->
+        %{}
+    end
+  end
+
+  defp clean_pr_response(overrides \\ %{}) do
+    Map.merge(
+      %{
+        "number" => 5,
+        "state" => "open",
+        "draft" => false,
+        "merged" => false,
+        "mergeable_state" => "clean",
+        "head" => %{"ref" => "feat/full-auto", "sha" => "abc123"},
+        "html_url" => "https://github.com/example/repo/pull/5",
+        "body" => "Closes #12"
+      },
+      overrides
+    )
+  end
+
+  defp project_items_response_for_promotion(mode) do
+    items =
+      case mode do
+        :active_todo ->
+          [project_item("PVTI_todo", 99, "Todo"), project_item("PVTI_ready", 13, "Ready")]
+
+        _other ->
+          [
+            project_item("PVTI_done", 12, "Done", "CLOSED"),
+            project_item("PVTI_ready", 13, "Ready")
+          ]
+      end
+
+    %{
+      "data" => %{
+        "organization" => %{
+          "projectV2" => %{
+            "id" => "PVT_x",
+            "fields" => %{"nodes" => [status_field()]},
+            "items" => %{"nodes" => items}
+          }
+        },
+        "user" => nil
+      }
+    }
+  end
+
+  defp project_item(id, number, status, state \\ "OPEN") do
+    %{
+      "id" => id,
+      "projectId" => "PVT_x",
+      "projectFields" => [status_field()],
+      "content" => %{"number" => number, "title" => "Issue #{number}", "state" => state},
+      "fieldValues" => %{"nodes" => [%{"name" => status, "field" => status_field()}]}
+    }
+  end
+
+  defp status_field do
+    %{
+      "id" => "status-field",
+      "name" => "Status",
+      "options" => [
+        %{"id" => "opt_todo", "name" => "Todo"},
+        %{"id" => "opt_ready", "name" => "Ready"},
+        %{"id" => "opt_done", "name" => "Done"}
+      ]
+    }
+  end
+
+  defp match_request?(request, method, suffix),
+    do: request.method == method and String.ends_with?(to_string(request.url), suffix)
+
+  defp collect_pending_requests(acc \\ []) do
+    receive do
+      {:github_request, request} -> collect_pending_requests([request | acc])
+    after
+      0 -> Enum.reverse(acc)
+    end
+  end
+
   defp collect_requests(count, acc \\ [])
   defp collect_requests(0, acc), do: Enum.reverse(acc)
 
