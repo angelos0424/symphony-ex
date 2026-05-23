@@ -41,7 +41,9 @@ automation:
   reviewbot:
     actors:
       - gemini-code-assist
+      - gemini-code-assist[bot]
       - coderabbitai
+      - coderabbitai[bot]
   full-auto:
     apply-review-feedback: true
     auto-merge: true
