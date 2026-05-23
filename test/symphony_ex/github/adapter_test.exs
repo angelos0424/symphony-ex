@@ -241,6 +241,97 @@ defmodule SymphonyEx.GitHub.AdapterTest do
     assert issue.url == "https://github.com/example/repo/issues/12"
   end
 
+  test "full-auto candidate polling promotes lowest Ready issue to Todo when no active issue exists" do
+    request_fun = fn request ->
+      case {request.method, to_string(request.url)} do
+        {:post, "https://api.github.com/graphql"} ->
+          json = request.options[:json]
+          query = json["query"]
+
+          cond do
+            String.contains?(query, "items(first: 100, query: $query)") ->
+              assert json["variables"]["query"] ==
+                       "is:open status:\"Todo\",\"In Progress\",\"In Review\",\"Ready\""
+
+              {:ok,
+               %Req.Response{
+                 status: 200,
+                 body: %{
+                   "data" => %{
+                     "organization" => %{
+                       "projectV2" => %{
+                         "id" => "PVT_123",
+                         "items" => %{
+                           "nodes" => [
+                             project_item("PVTI_ready_11", 11, "Ready"),
+                             project_item("PVTI_ready_9", 9, "Ready")
+                           ]
+                         }
+                       }
+                     },
+                     "user" => nil
+                   }
+                 }
+               }}
+
+            String.contains?(query, "updateProjectV2ItemFieldValue") ->
+              assert json["variables"] == %{
+                       "projectId" => "PVT_123",
+                       "itemId" => "PVTI_ready_9",
+                       "fieldId" => "status-field",
+                       "optionId" => "opt_todo"
+                     }
+
+              {:ok,
+               %Req.Response{
+                 status: 200,
+                 body: %{
+                   "data" => %{
+                     "updateProjectV2ItemFieldValue" => %{
+                       "projectV2Item" => %{"id" => "PVTI_ready_9"}
+                     }
+                   }
+                 }
+               }}
+
+            true ->
+              flunk("unexpected graphql query: #{query}")
+          end
+
+        {:get, "https://api.github.com/repos/example/repo/issues/9"} ->
+          {:ok,
+           %Req.Response{
+             status: 200,
+             body: %{
+               "id" => "I_9",
+               "number" => 9,
+               "title" => "Lower Ready task",
+               "body" => "Service: docs\nPaths: docs/ready.md\n",
+               "html_url" => "https://github.com/example/repo/issues/9",
+               "state" => "open"
+             }
+           }}
+
+        other ->
+          flunk("unexpected request: #{inspect(other)}")
+      end
+    end
+
+    opts = [
+      api_key: "gh-token",
+      owner: "example",
+      repo: "repo",
+      project_number: 7,
+      active_states: ["Todo", "In Progress"],
+      automation: [mode: :full_auto, full_auto: [promote_next_ready_to_todo: true]],
+      request_fun: request_fun
+    ]
+
+    assert {:ok, [issue]} = Adapter.fetch_candidate_issues(opts)
+    assert issue.identifier == "9"
+    assert issue.state == "Todo"
+  end
+
   test "fetches project item bodies only after status filtering and skips closed active items" do
     request_fun = fn request ->
       case {request.method, to_string(request.url)} do
