@@ -929,7 +929,7 @@ defmodule SymphonyEx.GitHub.Adapter do
   defp comment_author(comment) do
     case get_in(comment, ["user", "login"]) do
       login when is_binary(login) ->
-        case login |> String.trim() |> String.downcase() do
+        case login |> String.trim() |> String.downcase() |> String.replace_suffix("[bot]", "") do
           "" -> "unknown"
           normalized -> normalized
         end

@@ -278,8 +278,13 @@ defmodule SymphonyEx.Automation do
 
   defp normalize_reviewbot_actors(actor), do: normalize_reviewbot_actors([actor])
 
-  defp normalize_actor_login(actor),
-    do: actor |> to_string() |> String.trim() |> String.downcase()
+  defp normalize_actor_login(actor) do
+    actor
+    |> to_string()
+    |> String.trim()
+    |> String.downcase()
+    |> String.replace_suffix("[bot]", "")
+  end
 
   defp normalize_night_worker(opts) do
     opts = Keyword.merge(@default[:night_worker], opts)

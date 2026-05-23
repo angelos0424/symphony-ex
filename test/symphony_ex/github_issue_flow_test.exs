@@ -506,7 +506,7 @@ defmodule SymphonyEx.GitHubIssueFlowTest do
     Control.set_inbound_pr_reviews([
       %{
         "id" => 2001,
-        "user" => %{"login" => "gemini-code-assist"},
+        "user" => %{"login" => "gemini-code-assist[bot]"},
         "body" => "Please add coverage for the fallback path.",
         "html_url" => "https://github.com/example/repo/pull/3#pullrequestreview-2001"
       }
@@ -515,7 +515,7 @@ defmodule SymphonyEx.GitHubIssueFlowTest do
     Control.set_inbound_pr_review_comments([
       %{
         "id" => 3001,
-        "user" => %{"login" => "coderabbitai"},
+        "user" => %{"login" => "coderabbitai[bot]"},
         "body" => "This branch should handle nil metadata explicitly.",
         "html_url" => "https://github.com/example/repo/pull/3#discussion_r3001"
       },
