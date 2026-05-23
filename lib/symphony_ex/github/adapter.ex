@@ -525,7 +525,13 @@ defmodule SymphonyEx.GitHub.Adapter do
     active_states = Keyword.get(opts, :active_states, ["In Progress", "Todo"])
     review_task_states = Keyword.get(opts, :review_task_states, ["In Review"])
     identifiers = Keyword.get(opts, :include_issue_identifiers, [])
-    project_item_query = project_item_query_filter(active_states ++ review_task_states)
+    ready_state_name = full_auto_ready_state_name(opts)
+
+    project_item_query =
+      active_states
+      |> Enum.concat(review_task_states)
+      |> Enum.concat(List.wrap(ready_state_name))
+      |> project_item_query_filter()
 
     list_opts =
       opts
@@ -533,6 +539,8 @@ defmodule SymphonyEx.GitHub.Adapter do
       |> Keyword.put(:project_item_query, project_item_query)
 
     with {:ok, items} <- Client.list_project_items(list_opts),
+         {:ok, items} <-
+           maybe_promote_ready_candidate_during_poll(items, active_states, ready_state_name, opts),
          {:ok, issues} <-
            items
            |> Enum.filter(
@@ -548,6 +556,79 @@ defmodule SymphonyEx.GitHub.Adapter do
 
       {:ok, issues}
     end
+  end
+
+  @spec full_auto_ready_state_name(keyword()) :: String.t() | nil
+  defp full_auto_ready_state_name(opts) do
+    automation = Keyword.get(opts, :automation, [])
+    full_auto = Keyword.get(automation, :full_auto, [])
+
+    cond do
+      Automation.resolve_mode(automation) != :full_auto ->
+        nil
+
+      not Keyword.get(full_auto, :promote_next_ready_to_todo, false) ->
+        nil
+
+      true ->
+        full_auto
+        |> Keyword.get(:ready_state_name, "Ready")
+        |> to_string()
+        |> String.trim()
+        |> case do
+          "" -> "Ready"
+          value -> value
+        end
+    end
+  end
+
+  @spec maybe_promote_ready_candidate_during_poll(
+          [map()],
+          [String.t()],
+          String.t() | nil,
+          keyword()
+        ) ::
+          {:ok, [map()]} | {:error, term()}
+  defp maybe_promote_ready_candidate_during_poll(items, active_states, ready_state_name, opts)
+       when is_binary(ready_state_name) do
+    cond do
+      Enum.any?(items, &active_project_item?(&1, active_states)) ->
+        {:ok, items}
+
+      item = next_ready_project_item(items, ready_state_name) ->
+        with :ok <- sync_project_field(item, "Status", "Todo", opts) do
+          {:ok, replace_project_item(items, item["id"], put_project_item_status(item, "Todo"))}
+        else
+          {:error, _stage, _reason} -> {:ok, items}
+          {:error, _reason} -> {:ok, items}
+        end
+
+      true ->
+        {:ok, items}
+    end
+  end
+
+  defp maybe_promote_ready_candidate_during_poll(items, _active_states, _ready_state_name, _opts),
+    do: {:ok, items}
+
+  defp replace_project_item(items, item_id, replacement) do
+    Enum.map(items, fn
+      %{"id" => ^item_id} -> replacement
+      item -> item
+    end)
+  end
+
+  defp put_project_item_status(item, status) do
+    update_in(item, ["fieldValues", "nodes"], fn
+      nodes when is_list(nodes) ->
+        Enum.map(nodes, fn
+          %{"field" => %{"name" => "Status"}} = node -> Map.put(node, "name", status)
+          node -> node
+        end)
+
+      other ->
+        other
+    end)
   end
 
   @spec project_item_query_filter([String.t()]) :: String.t()
