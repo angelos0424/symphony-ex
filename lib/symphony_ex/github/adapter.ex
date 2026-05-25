@@ -929,7 +929,7 @@ defmodule SymphonyEx.GitHub.Adapter do
   defp comment_author(comment) do
     case get_in(comment, ["user", "login"]) do
       login when is_binary(login) ->
-        case login |> String.trim() |> String.downcase() do
+        case Automation.normalize_actor_login(login) do
           "" -> "unknown"
           normalized -> normalized
         end
@@ -1084,14 +1084,17 @@ defmodule SymphonyEx.GitHub.Adapter do
     end
   end
 
-  @spec configured_reviewbot_actors(keyword()) :: MapSet.t(String.t())
-  defp configured_reviewbot_actors(opts) do
+  @spec configured_reviewbot_actors(keyword(), keyword()) :: MapSet.t(String.t())
+  defp configured_reviewbot_actors(opts, config \\ []) do
     automation = Keyword.get(opts, :automation, [])
     active_mode = SymphonyEx.Automation.resolve_mode(automation)
     full_auto = Keyword.get(automation, :full_auto, [])
     reviewbot = Keyword.get(automation, :reviewbot, [])
+    require_apply_review_feedback? = Keyword.get(config, :require_apply_review_feedback?, true)
 
-    if active_mode == :full_auto and Keyword.get(full_auto, :apply_review_feedback, false) do
+    if active_mode == :full_auto and
+         (not require_apply_review_feedback? or
+            Keyword.get(full_auto, :apply_review_feedback, false)) do
       Keyword.get(reviewbot, :actors_set, MapSet.new(Keyword.get(reviewbot, :actors, [])))
     else
       MapSet.new()
@@ -1305,7 +1308,7 @@ defmodule SymphonyEx.GitHub.Adapter do
   end
 
   defp guard_no_human_requested_changes(pr_number, opts) do
-    reviewbot_actors = configured_reviewbot_actors(opts)
+    reviewbot_actors = configured_reviewbot_actors(opts, require_apply_review_feedback?: false)
 
     case Client.fetch_pull_request_reviews(pr_number, opts) do
       {:ok, reviews} ->
@@ -1487,8 +1490,7 @@ defmodule SymphonyEx.GitHub.Adapter do
       |> Map.get("user", %{})
       |> Kernel.||(%{})
       |> Map.get("login")
-      |> to_string()
-      |> String.downcase()
+      |> Automation.normalize_actor_login()
 
   defp latest_review_by_author(reviews) do
     Enum.reduce(reviews, %{}, fn review, acc ->
