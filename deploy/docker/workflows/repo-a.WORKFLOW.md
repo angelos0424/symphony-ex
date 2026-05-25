@@ -34,6 +34,8 @@ automation:
     - sns-manager
     - receipt-manager
     - todo-manager
+  service-aliases:
+    sns: sns-manager
   service-concurrency:
     sns-manager: 1
     receipt-manager: 1

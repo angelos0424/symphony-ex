@@ -197,11 +197,13 @@ defmodule SymphonyEx.ConfigTest do
       automation:
         mode: night-worker
         services:
-          - sns
+          - sns-manager
           - recipe
           - todo
+        service-aliases:
+          sns: sns-manager
         service-concurrency:
-          sns: 1
+          sns-manager: 1
           recipe: 1
           todo: 1
         "$reviewbot":
@@ -246,8 +248,15 @@ defmodule SymphonyEx.ConfigTest do
                }
 
         assert automation[:mode] == :night_worker
-        assert automation[:services] == ["sns", "recipe", "todo"]
-        assert automation[:service_concurrency] == %{"sns" => 1, "recipe" => 1, "todo" => 1}
+        assert automation[:services] == ["sns-manager", "recipe", "todo"]
+        assert automation[:service_aliases] == %{"sns" => "sns-manager"}
+
+        assert automation[:service_concurrency] == %{
+                 "sns-manager" => 1,
+                 "recipe" => 1,
+                 "todo" => 1
+               }
+
         assert automation[:reviewbot][:actors] == ["gemini-code-assist", "coderabbitai"]
 
         assert MapSet.equal?(

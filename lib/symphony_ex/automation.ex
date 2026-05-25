@@ -21,6 +21,7 @@ defmodule SymphonyEx.Automation do
   @default [
     mode: :default,
     services: [],
+    service_aliases: %{},
     service_concurrency: %{},
     reviewbot: [
       actors: [],
@@ -52,6 +53,11 @@ defmodule SymphonyEx.Automation do
     config = Keyword.merge(@default, config)
     services = normalize_services(Keyword.get(config, :services, []))
 
+    service_aliases =
+      config
+      |> Keyword.get(:service_aliases, %{})
+      |> normalize_service_aliases()
+
     service_concurrency =
       config
       |> Keyword.get(:service_concurrency, %{})
@@ -61,6 +67,7 @@ defmodule SymphonyEx.Automation do
     |> Keyword.put(:mode, normalize_mode(Keyword.get(config, :mode, :default)))
     |> Keyword.put(:services, services)
     |> Keyword.put(:services_set, MapSet.new(services))
+    |> Keyword.put(:service_aliases, service_aliases)
     |> Keyword.put(:service_concurrency, service_concurrency)
     |> Keyword.update(:reviewbot, @default[:reviewbot], &normalize_reviewbot/1)
     |> Keyword.update(:full_auto, @default[:full_auto], &normalize_full_auto/1)
@@ -87,6 +94,7 @@ defmodule SymphonyEx.Automation do
         :ok
     end
 
+    validate_service_aliases!(config)
     validate_service_concurrency!(config)
     validate_reviewbot!(Keyword.get(config, :reviewbot, []))
     validate_night_worker!(Keyword.get(config, :night_worker, []))
@@ -142,6 +150,7 @@ defmodule SymphonyEx.Automation do
   def issue_service(%Issue{} = issue, config) do
     services = Keyword.get(config, :services, [])
     configured = Keyword.get(config, :services_set, MapSet.new(services))
+    aliases = Keyword.get(config, :service_aliases, %{})
 
     explicit_services =
       issue.labels
@@ -160,7 +169,7 @@ defmodule SymphonyEx.Automation do
       service = Enum.find(explicit_services, &MapSet.member?(configured, &1)) ->
         service
 
-      service = title_prefix_service(issue.title, configured) ->
+      service = title_prefix_service(issue.title, configured, aliases) ->
         service
 
       true ->
@@ -195,6 +204,20 @@ defmodule SymphonyEx.Automation do
   end
 
   defp normalize_service_concurrency(_), do: %{}
+
+  defp normalize_service_aliases(value) when is_map(value) do
+    Map.new(value, fn {alias_name, service} ->
+      {normalize_service_name(alias_name), normalize_service_name(service)}
+    end)
+  end
+
+  defp normalize_service_aliases(value) when is_list(value) do
+    Map.new(value, fn {alias_name, service} ->
+      {normalize_service_name(alias_name), normalize_service_name(service)}
+    end)
+  end
+
+  defp normalize_service_aliases(_), do: %{}
 
   defp normalize_service_name(service),
     do: service |> to_string() |> String.trim() |> String.downcase()
@@ -288,6 +311,29 @@ defmodule SymphonyEx.Automation do
     |> Keyword.put(:mode_during_window, normalize_mode(Keyword.get(opts, :mode_during_window)))
     |> Keyword.put(:mode_outside_window, normalize_mode(Keyword.get(opts, :mode_outside_window)))
     |> Keyword.update(:windows, [], fn windows -> Enum.map(windows, &normalize_window/1) end)
+  end
+
+  defp validate_service_aliases!(config) do
+    services = Keyword.get(config, :services, []) |> MapSet.new()
+
+    config
+    |> Keyword.get(:service_aliases, %{})
+    |> Enum.each(fn {alias_name, service} ->
+      cond do
+        alias_name == "" ->
+          raise ArgumentError, "automation.service_aliases contains a blank alias"
+
+        service == "" ->
+          raise ArgumentError, "automation.service_aliases.#{alias_name} must target a service"
+
+        not MapSet.member?(services, service) ->
+          raise ArgumentError,
+                "automation.service_aliases.#{alias_name} targets service #{inspect(service)} not present in automation.services"
+
+        true ->
+          :ok
+      end
+    end)
   end
 
   defp validate_service_concurrency!(config) do
@@ -448,20 +494,28 @@ defmodule SymphonyEx.Automation do
   defp normalize_service_label("service/" <> service), do: normalize_service_name(service)
   defp normalize_service_label(_label), do: nil
 
-  defp title_prefix_service(title, configured_services) when is_binary(title) do
+  defp title_prefix_service(title, configured_services, aliases) when is_binary(title) do
     normalized_title = String.downcase(String.trim(title))
 
-    Enum.find(configured_services, fn service ->
-      String.starts_with?(normalized_title, [
-        "[#{service}]",
-        "#{service}:",
-        "#{service} -",
-        "#{service} "
-      ])
+    prefix_services =
+      configured_services
+      |> Enum.map(&{&1, &1})
+      |> Enum.concat(Map.to_list(aliases))
+
+    Enum.find_value(prefix_services, fn {prefix, service} ->
+      if MapSet.member?(configured_services, service) and
+           String.starts_with?(normalized_title, [
+             "[#{prefix}]",
+             "#{prefix}:",
+             "#{prefix} -",
+             "#{prefix} "
+           ]) do
+        service
+      end
     end)
   end
 
-  defp title_prefix_service(_title, _configured_services), do: nil
+  defp title_prefix_service(_title, _configured_services, _aliases), do: nil
 
   defp duplicates(values) do
     values
