@@ -136,6 +136,15 @@ Examples:
 7. Update `TODOS.md` after completed tasks or PR-scope changes when the issue changes actionable work, dependencies, validation notes, or completion state.
 8. Keep the final response concise and outcome-focused.
 
+## Service TODO Issue Sync
+- When a run adds a new unchecked task to a service TODO file, it must also publish a matching GitHub issue before finishing.
+- Service TODO files include `docs/todos-<service>.md`, `<service>_todo.md`, `<service>-todo.md`, or the repo's active per-service TODO equivalent.
+- Create one GitHub issue per newly added actionable task unless the issue explicitly says to draft only or not publish issues.
+- The generated issue must use the matching service prefix, label, path scope, and repository base branch from the Service Boundary Rules. For `sns-manager`, use `[sns]`, `sns-manager`, `sns/**`, and the repository base branch.
+- Include enough context for autonomous execution: request, work scope, deliverables, completion criteria, constraints, `Service`, `Paths`, `Target-Branch`, and a PR requirement with `Closes #<issue-number>`.
+- If the task is already covered by an open issue, do not create a duplicate; instead mention the existing issue in the PR body or final summary.
+- If GitHub issue creation fails because of auth, network, or missing metadata, keep the TODO change but report the blocker explicitly with the intended issue title/body summary.
+
 ## Branch and PR Rules
 - Create or update a branch named with the service prefix when code changes are required.
 - Create feature branches from the repository base branch.
