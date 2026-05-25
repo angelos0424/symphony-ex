@@ -131,6 +131,23 @@ defmodule SymphonyEx.AutomationTest do
            ) == "recipe"
   end
 
+  test "derives canonical service from configured title prefix alias" do
+    config =
+      Automation.normalize(services: ["sns-manager"], service_aliases: %{"sns" => "sns-manager"})
+
+    assert Automation.issue_service(issue_fixture("[sns] Upload adapter 범위 결정"), config) ==
+             "sns-manager"
+  end
+
+  test "rejects service aliases absent from automation services" do
+    config =
+      Automation.normalize(services: ["sns-manager"], service_aliases: %{"sns" => "legacy-sns"})
+
+    assert_raise ArgumentError,
+                 ~r/automation\.service_aliases\.sns targets service "legacy-sns" not present in automation\.services/,
+                 fn -> Automation.validate!(config) end
+  end
+
   test "rejects issue service labels absent from automation services" do
     config = Automation.normalize(services: ["sns"])
 

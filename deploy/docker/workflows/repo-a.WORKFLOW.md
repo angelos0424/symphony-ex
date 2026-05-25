@@ -31,11 +31,13 @@ orchestrator:
 automation:
   mode: full-auto
   services:
-    - post-manager
+    - sns-manager
     - receipt-manager
     - todo-manager
+  service-aliases:
+    sns: sns-manager
   service-concurrency:
-    post-manager: 1
+    sns-manager: 1
     receipt-manager: 1
     todo-manager: 1
   reviewbot:
@@ -92,15 +94,15 @@ This repository contains three independently developed services. Runtime service
 
 | Service | Issue Title Prefix | GitHub Label | Allowed Paths |
 | --- | --- | --- | --- |
-| post-manager | `[post-manager]` | `post-manager` | `post-manager/**` |
+| sns-manager | `[sns]` | `sns-manager` | `sns/**` |
 | receipt-manager | `[receipt-manager]` | `receipt-manager` | `receipt-manager/**` |
 | todo-manager | `[todo-manager]` | `todo-manager` | `todo-manager/**` |
 
 Rules:
 - Determine the target service from the issue title prefix.
-- Valid issue title prefixes are exactly `[post-manager]`, `[receipt-manager]`, and `[todo-manager]`.
+- Valid issue title prefixes are exactly `[sns]`, `[receipt-manager]`, and `[todo-manager]`.
 - Work only inside the matching service folder unless the issue explicitly requests shared/root configuration changes.
-- `[post-manager]` issues may only change `post-manager/**` by default.
+- `[sns]` issues may only change `sns/**` by default.
 - `[receipt-manager]` issues may only change `receipt-manager/**` by default.
 - `[todo-manager]` issues may only change `todo-manager/**` by default.
 - Do not modify another service folder while solving the current issue.
@@ -109,7 +111,7 @@ Rules:
 - If the issue title has no valid service prefix, stop and report the blocker clearly.
 
 Examples:
-- `[post-manager] Implement post list API` -> work under `post-manager/**`.
+- `[sns] Implement post list API` -> work under `sns/**`.
 - `[receipt-manager] Add receipt-manager detail page` -> work under `receipt-manager/**`.
 - `[todo-manager] Add due date validation` -> work under `todo-manager/**`.
 
@@ -128,7 +130,7 @@ Examples:
 
 ## Execution Guidelines
 1. Read the issue carefully before touching code.
-2. Identify the target service from the issue title prefix: `[post-manager]`, `[receipt-manager]`, or `[todo-manager]`.
+2. Identify the target service from the issue title prefix: `[sns]`, `[receipt-manager]`, or `[todo-manager]`.
 3. Verify that planned file changes stay inside the matching service folder.
 4. Read only the relevant service code and directly related shared/root files.
 5. Make the smallest requested change.
@@ -136,13 +138,22 @@ Examples:
 7. Update `TODOS.md` after completed tasks or PR-scope changes when the issue changes actionable work, dependencies, validation notes, or completion state.
 8. Keep the final response concise and outcome-focused.
 
+## Service TODO Issue Sync
+- When a run adds a new unchecked task to a service TODO file, it must also publish a matching GitHub issue before finishing.
+- Service TODO files include `docs/todos-<service>.md`, `<service>_todo.md`, `<service>-todo.md`, or the repo's active per-service TODO equivalent.
+- Create one GitHub issue per newly added actionable task unless the issue explicitly says to draft only or not publish issues.
+- The generated issue must use the matching service prefix, label, path scope, and repository base branch from the Service Boundary Rules. For `sns-manager`, use `[sns]`, `sns-manager`, `sns/**`, and the repository base branch.
+- Include enough context for autonomous execution: request, work scope, deliverables, completion criteria, constraints, `Service`, `Paths`, `Target-Branch`, and a PR requirement with `Closes #<issue-number>`.
+- If the task is already covered by an open issue, do not create a duplicate; instead mention the existing issue in the PR body or final summary.
+- If GitHub issue creation fails because of auth, network, or missing metadata, keep the TODO change but report the blocker explicitly with the intended issue title/body summary.
+
 ## Branch and PR Rules
 - Create or update a branch named with the service prefix when code changes are required.
 - Create feature branches from the repository base branch.
 - Open pull requests against the repository base branch.
 - If continuing an existing PR via `Target-PR` / `Target-Branch`, keep that PR's existing head branch but verify it targets the repository base branch before pushing more changes.
 - Preferred branch format:
-  - `post-manager/issue-<number>-<short-description>`
+  - `sns/issue-<number>-<short-description>`
   - `receipt-manager/issue-<number>-<short-description>`
   - `todo-manager/issue-<number>-<short-description>`
 - PR titles must keep the same service prefix as the issue.
@@ -183,7 +194,7 @@ Examples:
 Return only a single summary block in exactly this format:
 
 ## Symphony 작업 요약
-- service: ... (post-manager | receipt-manager | todo-manager)
+- service: ... (sns-manager | receipt-manager | todo-manager)
 - what changed: ...
 - files touched: ...
 - validation performed: ...

@@ -456,7 +456,7 @@ defmodule SymphonyEx.Config do
       normalized_key = normalize_key(k)
 
       normalized_value =
-        if normalized_key in [:project_fields, :service_concurrency],
+        if normalized_key in [:project_fields, :service_concurrency, :service_aliases],
           do: normalize_project_field_value(v),
           else: normalize_yaml(v)
 
