@@ -278,7 +278,9 @@ defmodule SymphonyEx.Automation do
 
   defp normalize_reviewbot_actors(actor), do: normalize_reviewbot_actors([actor])
 
-  defp normalize_actor_login(actor) do
+  @doc "Normalizes GitHub actor logins for reviewbot matching."
+  @spec normalize_actor_login(term()) :: String.t()
+  def normalize_actor_login(actor) do
     actor
     |> to_string()
     |> String.trim()

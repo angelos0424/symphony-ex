@@ -2479,6 +2479,46 @@ defmodule SymphonyEx.GitHub.AdapterTest do
            end)
   end
 
+  test "full-auto ignores configured reviewbot changes-requested reviews with bot suffix login" do
+    issue = full_auto_issue()
+    test_pid = self()
+
+    request_fun = fn request ->
+      send(test_pid, {:github_request, request})
+
+      body =
+        if match_request?(request, :get, "/repos/example/repo/pulls/5/reviews") do
+          [
+            %{
+              "user" => %{"login" => "gemini-code-assist[bot]", "type" => "User"},
+              "state" => "CHANGES_REQUESTED",
+              "submitted_at" => "2026-05-25T10:00:00Z"
+            }
+          ]
+        else
+          full_auto_response(request)
+        end
+
+      {:ok, %Req.Response{status: 200, body: body}}
+    end
+
+    opts =
+      full_auto_opts(request_fun,
+        full_auto: [auto_merge: true, allow_no_checks: true],
+        reviewbot: [actors: ["gemini-code-assist"]]
+      )
+
+    assert {:ok, _response} =
+             Adapter.write_run_record(
+               issue,
+               %{status: :released, result: :success, attempt: 1},
+               opts
+             )
+
+    requests = collect_pending_requests()
+    assert Enum.any?(requests, &match_request?(&1, :put, "/repos/example/repo/pulls/5/merge"))
+  end
+
   test "full-auto resolves related PR when issue target_pr metadata is missing" do
     issue = %{
       full_auto_issue()
@@ -2671,6 +2711,7 @@ defmodule SymphonyEx.GitHub.AdapterTest do
 
   defp full_auto_opts(request_fun, extra) do
     full_auto = Keyword.get(extra, :full_auto, [])
+    reviewbot = Keyword.get(extra, :reviewbot, actors: [], actors_set: MapSet.new())
 
     [
       api_key: "gh-token",
@@ -2692,10 +2733,10 @@ defmodule SymphonyEx.GitHub.AdapterTest do
             ],
             full_auto
           ),
-        reviewbot: [actors: [], actors_set: MapSet.new()]
+        reviewbot: reviewbot
       ]
     ]
-    |> Keyword.merge(Keyword.drop(extra, [:full_auto]))
+    |> Keyword.merge(Keyword.drop(extra, [:full_auto, :reviewbot]))
   end
 
   defp full_auto_response(request) do
