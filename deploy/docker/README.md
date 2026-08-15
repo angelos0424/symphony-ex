@@ -1,60 +1,38 @@
 # SymphonyEx Docker deployment templates
 
-This directory now follows a **repo-per-compose-file** layout.
-Each compose file declares its own project name so repo-a and repo-b can be started, stopped, and logged independently without sharing the same compose project/network lifecycle.
+This directory follows a **repo-per-compose-file** layout.
+Each compose file declares its own project name so repo-a, repo-b, and repo-c can be started, stopped, and logged independently.
 
 ## Files
 
 - `Dockerfile` — common SymphonyEx runtime image
-- `docker-compose.repo-a.yml` — repo-a container (`holywords`)
+- `docker-compose.repo-a.yml` — repo-a container (`activities`)
 - `docker-compose.repo-b.yml` — repo-b container (`cp` / `church_platform`)
-- `.env.example` — compose interpolation values (copy to `.env`)
-- `env/common.env.example` — shared runtime env template like `GITHUB_TOKEN` and logging
-- `env/repo-a.env.example` — repo-a specific env template
-- `env/repo-b.env.example` — repo-b specific env template
-- `env/*.env` — local runtime env files copied from examples; ignored by git
+- `docker-compose.repo-c.yml` — repo-c container (`saju-adult`)
+- `.env.example` — compose interpolation values
+- `env/common.env.example` — shared runtime env template
+- `env/repo-a.env.example` — repo-a template
+- `env/repo-b.env.example` — repo-b template
+- `env/repo-c.env.example` — repo-c template
+- `env/*.env` — ignored local runtime files
 - `workflows/repo-a.WORKFLOW.md` — repo-a workflow
 - `workflows/repo-b.WORKFLOW.md` — repo-b workflow
-- `ssh/config.example` — SSH config example for the mounted key directory
-
-## Directory conventions
-
-- repo-a always means `holywords`
-- repo-b always means `cp` / `church_platform`
-- compose files are intentionally split so `up`, `down`, and `logs` stay repo-scoped
-- each compose file declares its own project name and its own named volumes
-- each repo gets two persistent volumes:
-  - `<repo>_worktrees`
-  - `<repo>_source_cache`
+- `workflows/repo-c.WORKFLOW.md` — repo-c workflow
 
 ## Repository mapping
 
-- repo-a = `angelos0424/holywords`, GitHub Project `3`
+- repo-a = `angelos0424/activities`, GitHub Project `5`
 - repo-b = `angelos0424/church_platform`, GitHub Project `4`
-- repo-b short name = `cp`
+- repo-c = `angelos0424/saju-adult`, GitHub Project `7`
+
+Each repo has independent worktree/source-cache volumes. Compose files remain repo-scoped for build, start, logs, and stop.
 
 ## Operating defaults
 
-- one container per repo
-- one workflow per repo
-- one worktree volume per repo
-- one source-cache volume per repo
-- `poll-interval-ms: 60000`
-- `max-concurrent: 1`
 - dashboard disabled
 - GitHub API auth via `GITHUB_TOKEN`
-- git clone/fetch auth via SSH (`git@github.com:...`)
-
-## Authentication
-
-SymphonyEx does **not** require `gh` inside the container.
-
-1. **GitHub API**
-   - set `GITHUB_TOKEN` in `env/common.env`
-
-2. **Git transport**
-   - mount a dedicated SSH directory read-only into `/root/.ssh`
-   - that directory should contain `id_ed25519`, `known_hosts`, and optionally `config`
+- HTTPS source URL with token-based git transport
+- repo-c: `poll-interval-ms: 300000`, `max-concurrent: 1`, `max-retries: 0`
 
 ## First-time setup
 
@@ -64,45 +42,39 @@ cp .env.example .env
 cp env/common.env.example env/common.env
 cp env/repo-a.env.example env/repo-a.env
 cp env/repo-b.env.example env/repo-b.env
+cp env/repo-c.env.example env/repo-c.env
 ```
 
-Set `GITHUB_TOKEN` in `env/common.env`. The local `env/*.env` files are intentionally ignored by git.
-Set `SYMPHONY_SSH_DIR` in `.env` only if a repo uses SSH transport.
+Set `GITHUB_TOKEN` in ignored `env/common.env`. Host Codex state is mounted read-only and copied into the runtime home by the entrypoint.
 
-## Validate config
+## Validate
 
 ```bash
 cd deploy/docker
 docker compose --env-file .env -f docker-compose.repo-a.yml config
 docker compose --env-file .env -f docker-compose.repo-b.yml config
+docker compose --env-file .env -f docker-compose.repo-c.yml config
 ```
 
-## Run repo-a (holywords)
+## Run
 
 ```bash
 cd deploy/docker
-docker compose --env-file .env -f docker-compose.repo-a.yml up -d
+docker compose --env-file .env -f docker-compose.repo-c.yml up -d --build
 ```
 
-## Run repo-b (cp)
+Replace `repo-c` with `repo-a` or `repo-b` for the other isolated runners.
+
+## Inspect
 
 ```bash
-cd deploy/docker
-docker compose --env-file .env -f docker-compose.repo-b.yml up -d
-```
-
-## Logs
-
-```bash
-cd deploy/docker
-docker compose --env-file .env -f docker-compose.repo-a.yml logs -f
-docker compose --env-file .env -f docker-compose.repo-b.yml logs -f
+docker compose --env-file .env -f docker-compose.repo-c.yml ps
+docker compose --env-file .env -f docker-compose.repo-c.yml logs -f
+docker top symphony-repo-c -eo pid,lstart,cmd
 ```
 
 ## Stop
 
 ```bash
-cd deploy/docker
-docker compose --env-file .env -f docker-compose.repo-a.yml down
-docker compose --env-file .env -f docker-compose.repo-b.yml down
+docker compose --env-file .env -f docker-compose.repo-c.yml down
 ```

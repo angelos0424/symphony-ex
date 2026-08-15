@@ -171,17 +171,21 @@ For a **repo-per-container** operating model, use the templates under:
 - `deploy/docker/Dockerfile`
 - `deploy/docker/docker-compose.repo-a.yml`
 - `deploy/docker/docker-compose.repo-b.yml`
+- `deploy/docker/docker-compose.repo-c.yml`
 - `deploy/docker/env/common.env`
 - `deploy/docker/env/repo-a.env`
 - `deploy/docker/env/repo-b.env`
+- `deploy/docker/env/repo-c.env`
 - `deploy/docker/workflows/repo-a.WORKFLOW.md`
 - `deploy/docker/workflows/repo-b.WORKFLOW.md`
+- `deploy/docker/workflows/repo-c.WORKFLOW.md`
 - `deploy/docker/README.md`
 
 This starter is intentionally conservative for small hosts:
 
-- repo-a = `holywords`
+- repo-a = `activities`
 - repo-b = `cp` / `church_platform`
+- repo-c = `saju-adult`
 - one container per repo/project
 - one workflow per repo
 - one worktree volume per repo

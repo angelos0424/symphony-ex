@@ -1,0 +1,25 @@
+name: symphony-repo-c
+
+services:
+  symphony-repo-c:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    container_name: symphony-repo-c
+    restart: unless-stopped
+    init: true
+    env_file:
+      - ./env/common.env
+      - ./env/repo-c.env
+    environment:
+      SYMPHONY_WORKFLOW_PATH: /app/workflows/repo-c.WORKFLOW.md
+      SYMPHONY_DASHBOARD_ENABLED: "false"
+    volumes:
+      - ${HOME}/.codex:/run/host-codex:ro
+      - ./workflows/repo-c.WORKFLOW.md:/app/workflows/repo-c.WORKFLOW.md:ro
+      - repo_c_worktrees:/srv/symphony/repo-c/worktrees
+      - repo_c_source_cache:/srv/symphony/repo-c/source-cache
+
+volumes:
+  repo_c_worktrees:
+  repo_c_source_cache:
