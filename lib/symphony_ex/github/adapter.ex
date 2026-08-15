@@ -591,8 +591,16 @@ defmodule SymphonyEx.GitHub.Adapter do
           {:ok, [map()]} | {:error, term()}
   defp maybe_promote_ready_candidate_during_poll(items, active_states, ready_state_name, opts)
        when is_binary(ready_state_name) do
+    review_task_states = Keyword.get(opts, :review_task_states, ["In Review"])
+
     cond do
       Enum.any?(items, &active_project_item?(&1, active_states)) ->
+        {:ok, items}
+
+      # A released run is implementation-complete, not issue-complete. Keep the
+      # next Ready item gated while an open item is waiting for PR review/merge.
+      # The post-merge path promotes only after verifying Done/closed.
+      Enum.any?(items, &review_task_project_item?(&1, review_task_states)) ->
         {:ok, items}
 
       item = next_ready_project_item(items, ready_state_name) ->

@@ -332,6 +332,61 @@ defmodule SymphonyEx.GitHub.AdapterTest do
     assert issue.state == "Todo"
   end
 
+  test "full-auto candidate polling does not promote Ready while an issue is In Review" do
+    request_fun = fn request ->
+      case {request.method, to_string(request.url)} do
+        {:post, "https://api.github.com/graphql"} ->
+          json = request.options[:json]
+          query = json["query"]
+
+          if String.contains?(query, "items(first: 100, query: $query)") do
+            review_item =
+              project_item("PVTI_review_8", 8, "In Review")
+              |> put_in(["content", "body"], "Service: docs\nPaths: docs/review.md\n")
+
+            {:ok,
+             %Req.Response{
+               status: 200,
+               body: %{
+                 "data" => %{
+                   "organization" => %{
+                     "projectV2" => %{
+                       "id" => "PVT_123",
+                       "items" => %{
+                         "nodes" => [review_item, project_item("PVTI_ready_9", 9, "Ready")]
+                       }
+                     }
+                   },
+                   "user" => nil
+                 }
+               }
+             }}
+          else
+            flunk("Ready promotion must not run while an issue is In Review")
+          end
+
+        {:get, "https://api.github.com/repos/example/repo/issues/8/comments"} ->
+          {:ok, %Req.Response{status: 200, body: []}}
+
+        other ->
+          flunk("unexpected request: #{inspect(other)}")
+      end
+    end
+
+    opts = [
+      api_key: "gh-token",
+      owner: "example",
+      repo: "repo",
+      project_number: 7,
+      active_states: ["Todo", "In Progress"],
+      review_task_states: ["In Review"],
+      automation: [mode: :full_auto, full_auto: [promote_next_ready_to_todo: true]],
+      request_fun: request_fun
+    ]
+
+    assert {:ok, []} = Adapter.fetch_candidate_issues(opts)
+  end
+
   test "full-auto candidate polling keeps polling alive when Ready promotion fails" do
     request_fun = fn request ->
       case {request.method, to_string(request.url)} do
