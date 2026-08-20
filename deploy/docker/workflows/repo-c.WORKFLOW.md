@@ -78,6 +78,7 @@ Current state: <%= issue.state %>
 
 ## Branch, PR, and Validation Rules
 - File-changing work requires a branch from `main`, commit, push, and PR against `main`.
+- Full-auto mode requires a ready-for-review PR: never create a draft PR and immediately mark any accidentally drafted PR ready before returning.
 - PR body must include `Closes #<issue-number>`.
 - Do not report completion without a concrete PR URL.
 - Run the repository's relevant tests, lint, typecheck, and build commands when they exist.
