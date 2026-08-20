@@ -387,6 +387,115 @@ defmodule SymphonyEx.GitHub.AdapterTest do
     assert {:ok, []} = Adapter.fetch_candidate_issues(opts)
   end
 
+  test "full-auto candidate polling reconciles a clean In Review PR without dispatching an agent" do
+    test_pid = self()
+
+    request_fun = fn request ->
+      send(test_pid, {:github_request, request})
+
+      case {request.method, to_string(request.url)} do
+        {:post, "https://api.github.com/graphql"} ->
+          query = request.options[:json]["query"]
+
+          if String.contains?(query, "items(first: 100, query: $query)") do
+            review_item =
+              project_item("PVTI_review_9", 9, "In Review")
+              |> put_in(
+                ["content", "body"],
+                "Service: web\nPaths: tests/**\nTarget-PR: 25\nTarget-Branch: task/issue-9\n"
+              )
+
+            {:ok,
+             %Req.Response{
+               status: 200,
+               body: %{
+                 "data" => %{
+                   "organization" => %{
+                     "projectV2" => %{
+                       "id" => "PVT_123",
+                       "items" => %{"nodes" => [review_item]}
+                     }
+                   },
+                   "user" => nil
+                 }
+               }
+             }}
+          else
+            flunk("unexpected graphql query: #{query}")
+          end
+
+        {:get, "https://api.github.com/repos/example/repo/issues/9/comments"} ->
+          {:ok, %Req.Response{status: 200, body: []}}
+
+        {:get, "https://api.github.com/repos/example/repo/issues/25/comments"} ->
+          {:ok, %Req.Response{status: 200, body: []}}
+
+        {:get, "https://api.github.com/repos/example/repo/pulls/25/comments"} ->
+          {:ok, %Req.Response{status: 200, body: []}}
+
+        {:get, "https://api.github.com/repos/example/repo/pulls/25/reviews"} ->
+          {:ok, %Req.Response{status: 200, body: []}}
+
+        {:get, "https://api.github.com/repos/example/repo/pulls/25"} ->
+          {:ok,
+           %Req.Response{
+             status: 200,
+             body:
+               clean_pr_response(%{
+                 "number" => 25,
+                 "head" => %{"ref" => "task/issue-9", "sha" => "review-sha"}
+               })
+           }}
+
+        {:get, "https://api.github.com/repos/example/repo/commits/review-sha/status"} ->
+          {:ok,
+           %Req.Response{
+             status: 200,
+             body: %{"state" => "success", "statuses" => [%{"state" => "success"}]}
+           }}
+
+        {:get, "https://api.github.com/repos/example/repo/commits/review-sha/check-runs"} ->
+          {:ok,
+           %Req.Response{
+             status: 200,
+             body: %{
+               "check_runs" => [
+                 %{"name" => "ci", "status" => "completed", "conclusion" => "success"}
+               ]
+             }
+           }}
+
+        {:put, "https://api.github.com/repos/example/repo/pulls/25/merge"} ->
+          {:ok, %Req.Response{status: 200, body: %{"merged" => true}}}
+
+        {:post, "https://api.github.com/repos/example/repo/issues/9/comments"} ->
+          {:ok, %Req.Response{status: 201, body: request.options[:json]}}
+
+        other ->
+          flunk("unexpected request: #{inspect(other)}")
+      end
+    end
+
+    opts = [
+      api_key: "gh-token",
+      owner: "example",
+      repo: "repo",
+      project_number: 7,
+      active_states: ["Todo", "In Progress"],
+      review_task_states: ["In Review"],
+      automation: [
+        mode: :full_auto,
+        full_auto: [auto_merge: true, promote_next_ready_to_todo: false]
+      ],
+      request_fun: request_fun
+    ]
+
+    assert {:ok, []} = Adapter.fetch_candidate_issues(opts)
+
+    requests = collect_pending_requests()
+    assert Enum.any?(requests, &match_request?(&1, :put, "/repos/example/repo/pulls/25/merge"))
+  end
+
   test "full-auto candidate polling keeps polling alive when Ready promotion fails" do
     request_fun = fn request ->
       case {request.method, to_string(request.url)} do
@@ -2531,6 +2640,116 @@ defmodule SymphonyEx.GitHub.AdapterTest do
              request.method == :post and is_binary(body) and
                String.ends_with?(to_string(request.url), "/repos/example/repo/issues/12/comments") and
                body =~ "full_auto_status: merged"
+           end)
+  end
+
+  test "full-auto waits for pending checks before merging" do
+    issue = full_auto_issue()
+    test_pid = self()
+    {:ok, poll_counter} = Agent.start_link(fn -> 0 end)
+
+    request_fun = fn request ->
+      send(test_pid, {:github_request, request})
+
+      body =
+        cond do
+          match_request?(request, :get, "/repos/example/repo/commits/abc123/status") ->
+            poll = Agent.get_and_update(poll_counter, fn count -> {count, count + 1} end)
+
+            if poll == 0,
+              do: %{"state" => "pending", "statuses" => [%{"state" => "pending"}]},
+              else: %{"state" => "success", "statuses" => [%{"state" => "success"}]}
+
+          match_request?(request, :get, "/repos/example/repo/commits/abc123/check-runs") ->
+            if Agent.get(poll_counter, & &1) <= 1,
+              do: %{
+                "check_runs" => [
+                  %{"name" => "ci", "status" => "in_progress", "conclusion" => nil}
+                ]
+              },
+              else: %{
+                "check_runs" => [
+                  %{"name" => "ci", "status" => "completed", "conclusion" => "success"}
+                ]
+              }
+
+          true ->
+            full_auto_response(request)
+        end
+
+      {:ok, %Req.Response{status: 200, body: body}}
+    end
+
+    opts =
+      full_auto_opts(request_fun,
+        full_auto: [
+          auto_merge: true,
+          check_wait_timeout_ms: 100,
+          check_poll_interval_ms: 1
+        ]
+      )
+
+    assert {:ok, _response} =
+             Adapter.write_run_record(
+               issue,
+               %{status: :released, result: :success, attempt: 1},
+               opts
+             )
+
+    requests = collect_pending_requests()
+
+    assert Enum.count(
+             requests,
+             &match_request?(&1, :get, "/repos/example/repo/commits/abc123/status")
+           ) >= 2
+
+    assert Enum.any?(requests, &match_request?(&1, :put, "/repos/example/repo/pulls/5/merge"))
+
+    Agent.stop(poll_counter)
+  end
+
+  test "full-auto blocks after pending checks exceed the wait timeout" do
+    issue = full_auto_issue()
+    test_pid = self()
+
+    request_fun = fn request ->
+      send(test_pid, {:github_request, request})
+
+      body =
+        cond do
+          match_request?(request, :get, "/repos/example/repo/commits/abc123/status") ->
+            %{"state" => "pending", "statuses" => [%{"state" => "pending"}]}
+
+          match_request?(request, :get, "/repos/example/repo/commits/abc123/check-runs") ->
+            %{"check_runs" => [%{"name" => "ci", "status" => "in_progress", "conclusion" => nil}]}
+
+          true ->
+            full_auto_response(request)
+        end
+
+      {:ok, %Req.Response{status: 200, body: body}}
+    end
+
+    opts =
+      full_auto_opts(request_fun,
+        full_auto: [auto_merge: true, check_wait_timeout_ms: 0, check_poll_interval_ms: 1]
+      )
+
+    assert {:ok, _response} =
+             Adapter.write_run_record(
+               issue,
+               %{status: :released, result: :success, attempt: 1},
+               opts
+             )
+
+    requests = collect_pending_requests()
+    refute Enum.any?(requests, &match_request?(&1, :put, "/repos/example/repo/pulls/5/merge"))
+
+    assert Enum.any?(requests, fn request ->
+             body = get_in(request.options, [:json, :body])
+
+             request.method == :post and is_binary(body) and
+               body =~ "full_auto_status: blocked" and body =~ "Check wait timeout expired"
            end)
   end
 

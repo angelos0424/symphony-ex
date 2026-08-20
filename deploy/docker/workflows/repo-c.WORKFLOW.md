@@ -30,6 +30,8 @@ automation:
     auto-merge: true
     promote-next-ready-to-todo: true
     allow-no-checks: false
+    check-wait-timeout-ms: 600000
+    check-poll-interval-ms: 10000
     merge-method: squash
     ready-state-name: Ready
 codex:

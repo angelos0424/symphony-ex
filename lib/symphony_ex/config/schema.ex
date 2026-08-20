@@ -64,6 +64,8 @@ defmodule SymphonyEx.Config.Schema do
       auto_merge: [type: :boolean, default: false],
       promote_next_ready_to_todo: [type: :boolean, default: false],
       allow_no_checks: [type: :boolean, default: false],
+      check_wait_timeout_ms: [type: :non_neg_integer, default: 600_000],
+      check_poll_interval_ms: [type: :pos_integer, default: 10_000],
       merge_method: [
         type: {:or, [{:in, [:merge, :squash, :rebase]}, {:in, ["merge", "squash", "rebase"]}]},
         default: :squash
