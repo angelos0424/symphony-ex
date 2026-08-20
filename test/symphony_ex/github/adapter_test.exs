@@ -2534,6 +2534,116 @@ defmodule SymphonyEx.GitHub.AdapterTest do
            end)
   end
 
+  test "full-auto waits for pending checks before merging" do
+    issue = full_auto_issue()
+    test_pid = self()
+    {:ok, poll_counter} = Agent.start_link(fn -> 0 end)
+
+    request_fun = fn request ->
+      send(test_pid, {:github_request, request})
+
+      body =
+        cond do
+          match_request?(request, :get, "/repos/example/repo/commits/abc123/status") ->
+            poll = Agent.get_and_update(poll_counter, fn count -> {count, count + 1} end)
+
+            if poll == 0,
+              do: %{"state" => "pending", "statuses" => [%{"state" => "pending"}]},
+              else: %{"state" => "success", "statuses" => [%{"state" => "success"}]}
+
+          match_request?(request, :get, "/repos/example/repo/commits/abc123/check-runs") ->
+            if Agent.get(poll_counter, & &1) <= 1,
+              do: %{
+                "check_runs" => [
+                  %{"name" => "ci", "status" => "in_progress", "conclusion" => nil}
+                ]
+              },
+              else: %{
+                "check_runs" => [
+                  %{"name" => "ci", "status" => "completed", "conclusion" => "success"}
+                ]
+              }
+
+          true ->
+            full_auto_response(request)
+        end
+
+      {:ok, %Req.Response{status: 200, body: body}}
+    end
+
+    opts =
+      full_auto_opts(request_fun,
+        full_auto: [
+          auto_merge: true,
+          check_wait_timeout_ms: 100,
+          check_poll_interval_ms: 1
+        ]
+      )
+
+    assert {:ok, _response} =
+             Adapter.write_run_record(
+               issue,
+               %{status: :released, result: :success, attempt: 1},
+               opts
+             )
+
+    requests = collect_pending_requests()
+
+    assert Enum.count(
+             requests,
+             &match_request?(&1, :get, "/repos/example/repo/commits/abc123/status")
+           ) >= 2
+
+    assert Enum.any?(requests, &match_request?(&1, :put, "/repos/example/repo/pulls/5/merge"))
+
+    Agent.stop(poll_counter)
+  end
+
+  test "full-auto blocks after pending checks exceed the wait timeout" do
+    issue = full_auto_issue()
+    test_pid = self()
+
+    request_fun = fn request ->
+      send(test_pid, {:github_request, request})
+
+      body =
+        cond do
+          match_request?(request, :get, "/repos/example/repo/commits/abc123/status") ->
+            %{"state" => "pending", "statuses" => [%{"state" => "pending"}]}
+
+          match_request?(request, :get, "/repos/example/repo/commits/abc123/check-runs") ->
+            %{"check_runs" => [%{"name" => "ci", "status" => "in_progress", "conclusion" => nil}]}
+
+          true ->
+            full_auto_response(request)
+        end
+
+      {:ok, %Req.Response{status: 200, body: body}}
+    end
+
+    opts =
+      full_auto_opts(request_fun,
+        full_auto: [auto_merge: true, check_wait_timeout_ms: 0, check_poll_interval_ms: 1]
+      )
+
+    assert {:ok, _response} =
+             Adapter.write_run_record(
+               issue,
+               %{status: :released, result: :success, attempt: 1},
+               opts
+             )
+
+    requests = collect_pending_requests()
+    refute Enum.any?(requests, &match_request?(&1, :put, "/repos/example/repo/pulls/5/merge"))
+
+    assert Enum.any?(requests, fn request ->
+             body = get_in(request.options, [:json, :body])
+
+             request.method == :post and is_binary(body) and
+               body =~ "full_auto_status: blocked" and body =~ "Check wait timeout expired"
+           end)
+  end
+
   test "full-auto ignores configured reviewbot changes-requested reviews with bot suffix login" do
     issue = full_auto_issue()
     test_pid = self()

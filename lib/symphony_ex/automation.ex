@@ -32,6 +32,8 @@ defmodule SymphonyEx.Automation do
       auto_merge: false,
       promote_next_ready_to_todo: false,
       allow_no_checks: false,
+      check_wait_timeout_ms: 600_000,
+      check_poll_interval_ms: 10_000,
       merge_method: :squash,
       ready_state_name: "Ready"
     ],

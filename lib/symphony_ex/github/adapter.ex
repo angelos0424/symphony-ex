@@ -1352,25 +1352,63 @@ defmodule SymphonyEx.GitHub.Adapter do
   end
 
   defp guard_checks_pass(sha, opts, full_auto) do
+    timeout_ms = Keyword.get(full_auto, :check_wait_timeout_ms, 600_000)
+    deadline_ms = System.monotonic_time(:millisecond) + timeout_ms
+    poll_checks_until_terminal(sha, opts, full_auto, deadline_ms)
+  end
+
+  defp poll_checks_until_terminal(sha, opts, full_auto, deadline_ms) do
+    case fetch_checks_guard_result(sha, opts, full_auto) do
+      :ok ->
+        :ok
+
+      {:pending, reasons} ->
+        now_ms = System.monotonic_time(:millisecond)
+
+        if now_ms < deadline_ms do
+          poll_interval_ms = Keyword.get(full_auto, :check_poll_interval_ms, 10_000)
+          Process.sleep(min(poll_interval_ms, deadline_ms - now_ms))
+          poll_checks_until_terminal(sha, opts, full_auto, deadline_ms)
+        else
+          {:blocked, Enum.map(reasons, &"#{&1} Check wait timeout expired.")}
+        end
+
+      {:blocked, _reasons} = blocked ->
+        blocked
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp fetch_checks_guard_result(sha, opts, full_auto) do
     with {:ok, status} <- Client.fetch_commit_status(sha, opts),
          {:ok, check_runs} <- Client.fetch_check_runs(sha, opts) do
       combined_state = status["state"]
       runs = List.wrap(check_runs["check_runs"])
       status_contexts = List.wrap(status["statuses"])
       checks_present? = status_contexts != [] or runs != []
+      failed_run = Enum.find(runs, &check_run_failed?/1)
+      pending_run = Enum.find(runs, &check_run_pending?/1)
 
       cond do
         not checks_present? and Keyword.get(full_auto, :allow_no_checks, false) ->
           :ok
 
         not checks_present? ->
-          {:blocked, ["No status checks found and allow_no_checks is false."]}
+          {:pending, ["No status checks found yet."]}
+
+        failed_run ->
+          {:blocked, ["Check run #{inspect(failed_run["name"])} failed."]}
+
+        combined_state in ["failure", "error"] ->
+          {:blocked, ["Combined commit status is #{inspect(combined_state)}."]}
+
+        combined_state == "pending" or pending_run ->
+          {:pending, ["Commit status checks are still pending."]}
 
         combined_state not in [nil, "success"] ->
           {:blocked, ["Combined commit status is #{inspect(combined_state)}."]}
-
-        failing = Enum.find(runs, &(not check_run_passed?(&1))) ->
-          {:blocked, ["Check run #{inspect(failing["name"])} is not passing."]}
 
         true ->
           :ok
@@ -1507,8 +1545,10 @@ defmodule SymphonyEx.GitHub.Adapter do
     end)
   end
 
-  defp check_run_passed?(run) do
-    run["status"] == "completed" and run["conclusion"] in ["success", "neutral", "skipped"]
+  defp check_run_pending?(run), do: run["status"] != "completed"
+
+  defp check_run_failed?(run) do
+    run["status"] == "completed" and run["conclusion"] not in ["success", "neutral", "skipped"]
   end
 
   @spec maybe_update_issue_state(Issue.t(), map(), keyword()) :: :ok | {:error, term()}
