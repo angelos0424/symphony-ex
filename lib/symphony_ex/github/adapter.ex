@@ -541,14 +541,21 @@ defmodule SymphonyEx.GitHub.Adapter do
     with {:ok, items} <- Client.list_project_items(list_opts),
          {:ok, items} <-
            maybe_promote_ready_candidate_during_poll(items, active_states, ready_state_name, opts),
-         {:ok, issues} <-
+         {:ok, hydrated_items} <-
            items
            |> Enum.filter(
              &(active_project_item?(&1, active_states) or
                  review_task_project_item?(&1, review_task_states))
            )
-           |> hydrate_project_candidate_items(opts)
-           |> project_candidate_items_to_issues(active_states, review_task_states, opts) do
+           |> hydrate_project_candidate_items(opts),
+         :ok <- maybe_reconcile_full_auto_review_items(hydrated_items, review_task_states, opts),
+         {:ok, issues} <-
+           project_candidate_items_to_issues(
+             {:ok, hydrated_items},
+             active_states,
+             review_task_states,
+             opts
+           ) do
       issues =
         issues
         |> Enum.reject(&is_nil/1)
@@ -618,6 +625,44 @@ defmodule SymphonyEx.GitHub.Adapter do
 
   defp maybe_promote_ready_candidate_during_poll(items, _active_states, _ready_state_name, _opts),
     do: {:ok, items}
+
+  defp maybe_reconcile_full_auto_review_items(items, review_task_states, opts) do
+    automation = Keyword.get(opts, :automation, [])
+    full_auto = Keyword.get(automation, :full_auto, [])
+
+    if Automation.resolve_mode(automation) == :full_auto and
+         Keyword.get(full_auto, :auto_merge, false) do
+      reconciliation_full_auto = Keyword.put(full_auto, :check_wait_timeout_ms, 0)
+
+      Enum.each(items, fn item ->
+        if review_task_project_item?(item, review_task_states) do
+          issue = project_item_to_issue(item, opts)
+          issue_map = Map.get(item, "content", %{})
+
+          pending_tasks =
+            fetch_unprocessed_review_tasks(
+              issue_map["number"],
+              issue && issue.target_pr,
+              issue_map["body"] || "",
+              opts
+            )
+
+          if issue && is_integer(issue.target_pr) && pending_tasks == [] do
+            case maybe_auto_merge_pr(issue, %{}, opts, reconciliation_full_auto) do
+              {:ok, result} when result in [:merged, :already_merged] ->
+                _ = maybe_promote_next_ready_to_todo(issue, opts, full_auto)
+                :ok
+
+              _other ->
+                :ok
+            end
+          end
+        end
+      end)
+    end
+
+    :ok
+  end
 
   defp replace_project_item(items, item_id, replacement) do
     Enum.map(items, fn
@@ -715,20 +760,11 @@ defmodule SymphonyEx.GitHub.Adapter do
   defp hydrate_project_candidate_item(_item, _opts), do: {:ok, nil}
 
   @spec project_candidate_items_to_issues(
-          {:ok, [map()]} | {:error, term()},
+          {:ok, [map()]},
           [String.t()],
           [String.t()],
           keyword()
-        ) ::
-          {:ok, [Issue.t() | nil]} | {:error, term()}
-  defp project_candidate_items_to_issues(
-         {:error, _reason} = error,
-         _active_states,
-         _review_task_states,
-         _opts
-       ),
-       do: error
-
+        ) :: {:ok, [Issue.t() | nil]}
   defp project_candidate_items_to_issues({:ok, items}, active_states, review_task_states, opts) do
     issues =
       Enum.reduce(items, [], fn item, acc ->
@@ -1506,7 +1542,16 @@ defmodule SymphonyEx.GitHub.Adapter do
         "\n"
       )
 
-    create_comment(issue.identifier, body, opts)
+    case Client.fetch_issue_comments(issue.identifier, opts) do
+      {:ok, comments} ->
+        unless comments |> List.wrap() |> Enum.any?(&(to_string(&1["body"]) == body)) do
+          _ = create_comment(issue.identifier, body, opts)
+        end
+
+      {:error, _reason} ->
+        _ = create_comment(issue.identifier, body, opts)
+    end
+
     :ok
   end
 

@@ -387,6 +387,115 @@ defmodule SymphonyEx.GitHub.AdapterTest do
     assert {:ok, []} = Adapter.fetch_candidate_issues(opts)
   end
 
+  test "full-auto candidate polling reconciles a clean In Review PR without dispatching an agent" do
+    test_pid = self()
+
+    request_fun = fn request ->
+      send(test_pid, {:github_request, request})
+
+      case {request.method, to_string(request.url)} do
+        {:post, "https://api.github.com/graphql"} ->
+          query = request.options[:json]["query"]
+
+          if String.contains?(query, "items(first: 100, query: $query)") do
+            review_item =
+              project_item("PVTI_review_9", 9, "In Review")
+              |> put_in(
+                ["content", "body"],
+                "Service: web\nPaths: tests/**\nTarget-PR: 25\nTarget-Branch: task/issue-9\n"
+              )
+
+            {:ok,
+             %Req.Response{
+               status: 200,
+               body: %{
+                 "data" => %{
+                   "organization" => %{
+                     "projectV2" => %{
+                       "id" => "PVT_123",
+                       "items" => %{"nodes" => [review_item]}
+                     }
+                   },
+                   "user" => nil
+                 }
+               }
+             }}
+          else
+            flunk("unexpected graphql query: #{query}")
+          end
+
+        {:get, "https://api.github.com/repos/example/repo/issues/9/comments"} ->
+          {:ok, %Req.Response{status: 200, body: []}}
+
+        {:get, "https://api.github.com/repos/example/repo/issues/25/comments"} ->
+          {:ok, %Req.Response{status: 200, body: []}}
+
+        {:get, "https://api.github.com/repos/example/repo/pulls/25/comments"} ->
+          {:ok, %Req.Response{status: 200, body: []}}
+
+        {:get, "https://api.github.com/repos/example/repo/pulls/25/reviews"} ->
+          {:ok, %Req.Response{status: 200, body: []}}
+
+        {:get, "https://api.github.com/repos/example/repo/pulls/25"} ->
+          {:ok,
+           %Req.Response{
+             status: 200,
+             body:
+               clean_pr_response(%{
+                 "number" => 25,
+                 "head" => %{"ref" => "task/issue-9", "sha" => "review-sha"}
+               })
+           }}
+
+        {:get, "https://api.github.com/repos/example/repo/commits/review-sha/status"} ->
+          {:ok,
+           %Req.Response{
+             status: 200,
+             body: %{"state" => "success", "statuses" => [%{"state" => "success"}]}
+           }}
+
+        {:get, "https://api.github.com/repos/example/repo/commits/review-sha/check-runs"} ->
+          {:ok,
+           %Req.Response{
+             status: 200,
+             body: %{
+               "check_runs" => [
+                 %{"name" => "ci", "status" => "completed", "conclusion" => "success"}
+               ]
+             }
+           }}
+
+        {:put, "https://api.github.com/repos/example/repo/pulls/25/merge"} ->
+          {:ok, %Req.Response{status: 200, body: %{"merged" => true}}}
+
+        {:post, "https://api.github.com/repos/example/repo/issues/9/comments"} ->
+          {:ok, %Req.Response{status: 201, body: request.options[:json]}}
+
+        other ->
+          flunk("unexpected request: #{inspect(other)}")
+      end
+    end
+
+    opts = [
+      api_key: "gh-token",
+      owner: "example",
+      repo: "repo",
+      project_number: 7,
+      active_states: ["Todo", "In Progress"],
+      review_task_states: ["In Review"],
+      automation: [
+        mode: :full_auto,
+        full_auto: [auto_merge: true, promote_next_ready_to_todo: false]
+      ],
+      request_fun: request_fun
+    ]
+
+    assert {:ok, []} = Adapter.fetch_candidate_issues(opts)
+
+    requests = collect_pending_requests()
+    assert Enum.any?(requests, &match_request?(&1, :put, "/repos/example/repo/pulls/25/merge"))
+  end
+
   test "full-auto candidate polling keeps polling alive when Ready promotion fails" do
     request_fun = fn request ->
       case {request.method, to_string(request.url)} do
