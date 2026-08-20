@@ -2643,6 +2643,45 @@ defmodule SymphonyEx.GitHub.AdapterTest do
            end)
   end
 
+  test "full-auto accepts successful check runs when combined status has no contexts" do
+    issue = full_auto_issue()
+    test_pid = self()
+
+    request_fun = fn request ->
+      send(test_pid, {:github_request, request})
+
+      body =
+        cond do
+          match_request?(request, :get, "/repos/example/repo/commits/abc123/status") ->
+            %{"state" => "pending", "statuses" => []}
+
+          match_request?(request, :get, "/repos/example/repo/commits/abc123/check-runs") ->
+            %{
+              "check_runs" => [
+                %{"name" => "ci", "status" => "completed", "conclusion" => "success"}
+              ]
+            }
+
+          true ->
+            full_auto_response(request)
+        end
+
+      {:ok, %Req.Response{status: 200, body: body}}
+    end
+
+    opts = full_auto_opts(request_fun, full_auto: [auto_merge: true])
+
+    assert {:ok, _response} =
+             Adapter.write_run_record(
+               issue,
+               %{status: :released, result: :success, attempt: 1},
+               opts
+             )
+
+    requests = collect_pending_requests()
+    assert Enum.any?(requests, &match_request?(&1, :put, "/repos/example/repo/pulls/5/merge"))
+  end
+
   test "full-auto waits for pending checks before merging" do
     issue = full_auto_issue()
     test_pid = self()

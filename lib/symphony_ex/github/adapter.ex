@@ -1420,9 +1420,10 @@ defmodule SymphonyEx.GitHub.Adapter do
   defp fetch_checks_guard_result(sha, opts, full_auto) do
     with {:ok, status} <- Client.fetch_commit_status(sha, opts),
          {:ok, check_runs} <- Client.fetch_check_runs(sha, opts) do
-      combined_state = status["state"]
+      raw_combined_state = status["state"]
       runs = List.wrap(check_runs["check_runs"])
       status_contexts = List.wrap(status["statuses"])
+      combined_state = if status_contexts == [], do: nil, else: raw_combined_state
       checks_present? = status_contexts != [] or runs != []
       failed_run = Enum.find(runs, &check_run_failed?/1)
       pending_run = Enum.find(runs, &check_run_pending?/1)
