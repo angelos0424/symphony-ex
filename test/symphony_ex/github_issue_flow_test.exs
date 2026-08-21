@@ -934,7 +934,7 @@ defmodule SymphonyEx.GitHubIssueFlowTest do
     end)
 
     control = Control.snapshot()
-    assert control.project_status == "In Review"
+    assert control.project_status == "Todo"
     assert Enum.map(control.comment_reactions, & &1.content) == ["eyes", "rocket", "-1"]
   end
 

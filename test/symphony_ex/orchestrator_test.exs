@@ -1531,6 +1531,28 @@ defmodule SymphonyEx.OrchestratorTest do
       assert final.payload[:result] == :failed
     end
 
+    test "exhausted cancellation preserves released(cancelled)" do
+      issue = issue_fixture("LC-CANCELLED")
+
+      start_supervised!(
+        {Control,
+         test_pid: self(),
+         candidate_batches: [[issue]],
+         run_results: [%{status: :cancelled, events: [], error: "interrupted"}]}
+      )
+
+      orchestrator = start_orchestrator(max_retries: 0)
+
+      wait_until(fn ->
+        snapshot = Orchestrator.snapshot(orchestrator)
+        map_size(snapshot.running) == 0 and length(Control.runs()) == 1
+      end)
+
+      final = Control.updates() |> List.last()
+      assert final.payload[:status] == :released
+      assert final.payload[:result] == :cancelled
+    end
+
     test "lifecycle falls back from tracker_opts when no top-level lifecycle opt is passed" do
       alias SymphonyEx.Orchestrator.Lifecycle
 
