@@ -2268,6 +2268,12 @@ defmodule SymphonyEx.GitHub.AdapterTest do
       assert Lifecycle.resolve_project_status(lc, :released, :success) == "In Review"
       assert Lifecycle.resolve_project_status(lc, :released, :failed) == "Todo"
       assert Lifecycle.resolve_project_status(lc, :released, :cancelled) == "Todo"
+
+      custom =
+        Lifecycle.new(project_status_mapping: %{{:released, :any} => "Custom Queue"})
+
+      assert Lifecycle.resolve_project_status(custom, :released, :failed) == "Custom Queue"
+      assert Lifecycle.resolve_project_status(custom, :released, :cancelled) == "Custom Queue"
     end
   end
 
