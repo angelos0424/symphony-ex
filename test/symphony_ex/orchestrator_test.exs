@@ -123,6 +123,19 @@ defmodule SymphonyEx.OrchestratorTest do
     def cleanup_inactive_worktrees(_opts), do: :ok
   end
 
+  defmodule RecordingWorkspace do
+    def prepare(issue, _opts), do: {:ok, %{path: "/tmp/#{issue.identifier}", reason: :fresh}}
+    def create(issue, _opts), do: {:ok, "/tmp/#{issue.identifier}"}
+
+    def remove(path, opts) do
+      send(Keyword.fetch!(opts, :test_pid), {:workspace_removed, path})
+      :ok
+    end
+
+    def run_lifecycle_hook(_name, _path, _opts, _issue), do: :ok
+    def cleanup_inactive_worktrees(_opts), do: :ok
+  end
+
   defmodule CleanupWorkspace do
     def prepare(issue, _opts), do: {:ok, %{path: "/tmp/#{issue.identifier}", reason: :fresh}}
     def create(issue, _opts), do: {:ok, "/tmp/#{issue.identifier}"}
@@ -278,6 +291,86 @@ defmodule SymphonyEx.OrchestratorTest do
     )
 
     assert_receive {:cleanup_called, []}, 500
+  end
+
+  test "preserves failed and cancelled worktrees for recovery" do
+    Enum.each([:failed, :cancelled], fn status ->
+      issue = issue_fixture("PRESERVE-#{status}")
+
+      start_supervised!(
+        {Control,
+         test_pid: self(),
+         candidate_batches: [[issue], []],
+         run_results: [
+           %{
+             status: status,
+             events: [],
+             error: "interrupted",
+             error_category: "turn_cancelled"
+           }
+         ]}
+      )
+
+      orchestrator =
+        start_supervised!(
+          {Orchestrator,
+           tracker: MockTracker,
+           workspace: RecordingWorkspace,
+           agent_runner: MockAgentRunner,
+           tracker_opts: [],
+           workspace_opts: [test_pid: self()],
+           workflow_path: "/tmp/WORKFLOW.md",
+           codex: [],
+           poll_interval_ms: 60_000,
+           max_retries: 0,
+           max_concurrent: 1,
+           task_supervisor: SymphonyEx.TestAgentWorkers},
+          id: {:preserve_worktree, status}
+        )
+
+      wait_until(fn ->
+        snapshot = Orchestrator.snapshot(orchestrator)
+        map_size(snapshot.running) == 0 and length(snapshot.completed) == 1
+      end)
+
+      removed_path = "/tmp/PRESERVE-#{status}"
+      refute_received {:workspace_removed, ^removed_path}
+      stop_supervised!({:preserve_worktree, status})
+      stop_supervised!(Control)
+    end)
+  end
+
+  test "removes worktrees after verified successful runs" do
+    issue = issue_fixture("REMOVE-SUCCESS")
+
+    start_supervised!(
+      {Control,
+       test_pid: self(),
+       candidate_batches: [[issue], []],
+       run_results: [%{status: :success, events: [], error: nil}]}
+    )
+
+    orchestrator =
+      start_supervised!(
+        {Orchestrator,
+         tracker: MockTracker,
+         workspace: RecordingWorkspace,
+         agent_runner: MockAgentRunner,
+         tracker_opts: [],
+         workspace_opts: [test_pid: self()],
+         workflow_path: "/tmp/WORKFLOW.md",
+         codex: [],
+         poll_interval_ms: 60_000,
+         max_concurrent: 1,
+         task_supervisor: SymphonyEx.TestAgentWorkers}
+      )
+
+    wait_until(fn ->
+      snapshot = Orchestrator.snapshot(orchestrator)
+      map_size(snapshot.running) == 0 and length(snapshot.completed) == 1
+    end)
+
+    assert_received {:workspace_removed, "/tmp/REMOVE-SUCCESS"}
   end
 
   test "posts a completion summary comment after successful runs" do

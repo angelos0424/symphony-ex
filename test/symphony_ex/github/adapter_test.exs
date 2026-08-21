@@ -2832,11 +2832,12 @@ defmodule SymphonyEx.GitHub.AdapterTest do
     assert Enum.any?(requests, &match_request?(&1, :put, "/repos/example/repo/pulls/5/merge"))
   end
 
-  test "full-auto resolves related PR when issue target_pr metadata is missing" do
+  test "full-auto resolves a related PR when new-work metadata still names main" do
     issue = %{
       full_auto_issue()
       | target_pr: nil,
-        description: "Service: app\nPaths: lib/**\nTarget-Branch: feat/full-auto"
+        description: "Service: app\nPaths: lib/**\nTarget-Branch: main",
+        target_branch: "main"
     }
 
     test_pid = self()

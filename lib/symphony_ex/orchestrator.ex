@@ -639,13 +639,18 @@ defmodule SymphonyEx.Orchestrator do
         state
 
       {%{workspace_path: workspace_path, issue: issue, attempt: attempt} = running_entry, running} ->
-        _ = state.workspace.remove(workspace_path, state.workspace_opts)
+        if successful_result?(result) do
+          _ = state.workspace.remove(workspace_path, state.workspace_opts)
+        end
 
         state
         |> Map.put(:running, running)
         |> maybe_retry_or_release(issue, attempt, result, running_entry)
     end
   end
+
+  defp successful_result?(%{status: :success}), do: true
+  defp successful_result?(_result), do: false
 
   @spec maybe_retry_or_release(state(), Issue.t(), non_neg_integer(), term(), running_entry()) ::
           state()
@@ -661,21 +666,6 @@ defmodule SymphonyEx.Orchestrator do
       Map.merge(%{result: :success}, persisted_completion_metadata(metadata))
     )
     |> clear_issue_retry_state(issue, attempt, metadata)
-  end
-
-  defp maybe_retry_or_release(
-         state,
-         issue,
-         attempt,
-         %{status: :cancelled} = result,
-         running_entry
-       ) do
-    state
-    |> persist_run_state(issue, :released, attempt, %{
-      result: :cancelled,
-      details: inspect(result)
-    })
-    |> clear_issue_retry_state(issue, attempt, completion_metadata(result, running_entry))
   end
 
   defp maybe_retry_or_release(state, issue, attempt, result, running_entry) do

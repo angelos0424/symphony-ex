@@ -385,7 +385,7 @@ defmodule SymphonyEx.AgentRunner do
         last_event: last_event,
         elapsed_ms: elapsed_ms
       }
-      |> validate_success_result(events, ctx.issue)
+      |> validate_success_result(events, ctx.issue, ctx.workspace_path)
 
     persist_terminal_session(
       ctx.workspace_path,
@@ -550,8 +550,8 @@ defmodule SymphonyEx.AgentRunner do
     end)
   end
 
-  @spec validate_success_result(run_result(), [Events.t()], Issue.t()) :: run_result()
-  defp validate_success_result(%{status: :success} = result, events, issue) do
+  @spec validate_success_result(run_result(), [Events.t()], Issue.t(), Path.t()) :: run_result()
+  defp validate_success_result(%{status: :success} = result, events, issue, workspace_path) do
     case transient_failure_message(result, events) do
       {:failed, message, category} ->
         %{
@@ -574,7 +574,8 @@ defmodule SymphonyEx.AgentRunner do
             }
 
           nil ->
-            with :ok <- verify_required_outputs(issue),
+            with :ok <- verify_required_pr(issue, workspace_path),
+                 :ok <- verify_required_outputs(issue),
                  thread_log_path when is_binary(thread_log_path) <-
                    extract_thread_log_path(events),
                  turn_id when is_binary(turn_id) <- result.turn_id,
@@ -604,7 +605,140 @@ defmodule SymphonyEx.AgentRunner do
     end
   end
 
-  defp validate_success_result(result, _events, _issue), do: result
+  defp validate_success_result(result, _events, _issue, _workspace_path), do: result
+
+  @runtime_artifact_paths [
+    ".agents",
+    ".symphony",
+    ".symphony-session.json",
+    ".symphony-run-events.ndjson"
+  ]
+
+  @spec verify_required_pr(Issue.t(), Path.t()) :: :ok | {:error, String.t(), String.t()}
+  defp verify_required_pr(%Issue{} = issue, workspace_path) do
+    case material_workspace_changes(workspace_path) do
+      {:ok, :clean} ->
+        :ok
+
+      {:ok, :dirty} ->
+        {:error,
+         "Agent left uncommitted material workspace changes; preserve the worktree and commit/push them before reporting success",
+         "required_pr_uncommitted_changes"}
+
+      {:ok, {:committed, head_sha}} ->
+        issue
+        |> fetch_issue_prs()
+        |> verify_related_pr_contains_head(issue, head_sha)
+
+      {:error, :not_a_git_repository} ->
+        :ok
+
+      {:error, reason} ->
+        {:error,
+         "Could not verify whether the workspace has material changes: #{inspect(reason)}",
+         "workspace_change_unverified"}
+    end
+  end
+
+  @spec verify_related_pr_contains_head(
+          {:ok, [map()]} | {:error, term()},
+          Issue.t(),
+          String.t()
+        ) :: :ok | {:error, String.t(), String.t()}
+  defp verify_related_pr_contains_head({:ok, prs}, issue, head_sha) do
+    related_prs = Enum.filter(prs, &related_pr_matches_issue?(&1, issue))
+
+    cond do
+      related_prs == [] ->
+        {:error,
+         "Agent created commits without a related pull request; preserve the worktree and create a PR before reporting success",
+         "required_pr_missing"}
+
+      Enum.any?(related_prs, &(pr_head_sha(&1) == head_sha)) ->
+        :ok
+
+      true ->
+        {:error,
+         "No related pull request head contains the workspace HEAD #{head_sha}; preserve the worktree and push the commit before reporting success",
+         "required_pr_head_mismatch"}
+    end
+  end
+
+  defp verify_related_pr_contains_head({:error, reason}, _issue, _head_sha) do
+    {:error, "Committed workspace changes exist, but PR verification failed: #{inspect(reason)}",
+     "required_pr_unverified"}
+  end
+
+  @spec material_workspace_changes(Path.t()) ::
+          {:ok, :clean | :dirty | {:committed, String.t()}} | {:error, term()}
+  defp material_workspace_changes(workspace_path) do
+    case System.cmd("git", ["status", "--porcelain=v1", "--untracked-files=all"],
+           cd: workspace_path,
+           stderr_to_stdout: true
+         ) do
+      {output, 0} ->
+        status_changes? =
+          output
+          |> String.split("\n", trim: true)
+          |> Enum.map(&status_path/1)
+          |> Enum.any?(&(not runtime_artifact_path?(&1)))
+
+        cond do
+          status_changes? -> {:ok, :dirty}
+          commits_ahead_of_default?(workspace_path) -> workspace_head(workspace_path)
+          true -> {:ok, :clean}
+        end
+
+      {output, _code} ->
+        if String.contains?(String.downcase(output), "not a git repository") do
+          {:error, :not_a_git_repository}
+        else
+          {:error, String.trim(output)}
+        end
+    end
+  end
+
+  @spec status_path(String.t()) :: String.t()
+  defp status_path(line) do
+    line
+    |> String.slice(3..-1//1)
+    |> to_string()
+    |> String.split(" -> ")
+    |> List.last()
+    |> String.trim(~s("))
+  end
+
+  @spec runtime_artifact_path?(String.t()) :: boolean()
+  defp runtime_artifact_path?(path) do
+    Enum.any?(@runtime_artifact_paths, fn runtime_path ->
+      path == runtime_path or String.starts_with?(path, runtime_path <> "/")
+    end)
+  end
+
+  @spec workspace_head(Path.t()) :: {:ok, {:committed, String.t()}} | {:error, term()}
+  defp workspace_head(workspace_path) do
+    case System.cmd("git", ["rev-parse", "HEAD"], cd: workspace_path, stderr_to_stdout: true) do
+      {sha, 0} -> {:ok, {:committed, String.trim(sha)}}
+      {output, _code} -> {:error, String.trim(output)}
+    end
+  end
+
+  @spec commits_ahead_of_default?(Path.t()) :: boolean()
+  defp commits_ahead_of_default?(workspace_path) do
+    case System.cmd("git", ["rev-list", "--count", "refs/remotes/origin/HEAD..HEAD"],
+           cd: workspace_path,
+           stderr_to_stdout: true
+         ) do
+      {count, 0} ->
+        case Integer.parse(String.trim(count)) do
+          {value, ""} -> value > 0
+          _other -> false
+        end
+
+      _other ->
+        false
+    end
+  end
 
   @spec extract_thread_log_path([Events.t()]) :: String.t() | nil
   defp extract_thread_log_path(events) do
@@ -716,15 +850,8 @@ defmodule SymphonyEx.AgentRunner do
         &default_fetch_issue_body/1
       )
 
-    pr_fetcher =
-      Application.get_env(
-        :symphony_ex,
-        :agent_runner_issue_pr_fetcher,
-        &default_fetch_issue_prs/1
-      )
-
     with {:ok, latest_body} <- fetcher.(issue),
-         {:ok, prs} <- pr_fetcher.(issue) do
+         {:ok, prs} <- fetch_issue_prs(issue) do
       body_updated =
         normalize_issue_body(latest_body) != normalize_issue_body(issue.description || "")
 
@@ -741,8 +868,27 @@ defmodule SymphonyEx.AgentRunner do
     end
   end
 
+  @spec fetch_issue_prs(Issue.t()) :: {:ok, [map()]} | {:error, term()}
+  defp fetch_issue_prs(%Issue{} = issue) do
+    fetcher =
+      Application.get_env(
+        :symphony_ex,
+        :agent_runner_issue_pr_fetcher,
+        &default_fetch_issue_prs/1
+      )
+
+    fetcher.(issue)
+  end
+
   @spec default_fetch_issue_prs(Issue.t()) :: {:ok, [map()]} | {:error, term()}
-  defp default_fetch_issue_prs(%Issue{} = _issue) do
+  defp default_fetch_issue_prs(%Issue{target_pr: target_pr}) when is_integer(target_pr) do
+    case Client.fetch_pull_request(target_pr, github_client_opts()) do
+      {:ok, pr} -> {:ok, [pr]}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp default_fetch_issue_prs(%Issue{}) do
     Client.list_pull_requests(github_client_opts())
   end
 
@@ -758,6 +904,9 @@ defmodule SymphonyEx.AgentRunner do
     head_ref = get_in(pr, ["head", "ref"]) || pr["headRefName"] || ""
     issue_number = to_string(issue.identifier)
 
+    linked_by_issue =
+      issue_reference?(body, issue_number) or branch_references_issue?(head_ref, issue_number)
+
     cond do
       is_integer(issue.target_pr) and is_binary(issue.target_branch) ->
         pr_number == issue.target_pr and head_ref == issue.target_branch
@@ -765,14 +914,30 @@ defmodule SymphonyEx.AgentRunner do
       is_integer(issue.target_pr) ->
         pr_number == issue.target_pr
 
-      is_binary(issue.target_branch) and String.trim(issue.target_branch) != "" and
-          head_ref == issue.target_branch ->
+      linked_by_issue ->
         true
 
+      is_binary(issue.target_branch) and String.trim(issue.target_branch) != "" ->
+        head_ref == issue.target_branch
+
       true ->
-        String.contains?(body, "##{issue_number}") or
-          String.contains?(head_ref, "issue-#{issue_number}")
+        false
     end
+  end
+
+  @spec issue_reference?(String.t(), String.t()) :: boolean()
+  defp issue_reference?(body, issue_number) do
+    Regex.match?(~r/##{Regex.escape(issue_number)}(?![0-9A-Za-z_-])/i, body)
+  end
+
+  @spec branch_references_issue?(String.t(), String.t()) :: boolean()
+  defp branch_references_issue?(head_ref, issue_number) do
+    Regex.match?(~r/issue-#{Regex.escape(issue_number)}(?![0-9A-Za-z])/i, head_ref)
+  end
+
+  @spec pr_head_sha(map()) :: String.t() | nil
+  defp pr_head_sha(pr) do
+    get_in(pr, ["head", "sha"]) || pr["headRefOid"] || pr["head_sha"]
   end
 
   @spec github_client_opts() :: keyword()

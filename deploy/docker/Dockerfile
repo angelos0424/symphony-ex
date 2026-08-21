@@ -19,7 +19,14 @@ RUN mix release
 FROM node:22-bullseye-slim AS runtime
 
 ARG CODEX_NPM_VERSION=latest
-RUN apt-get update && apt-get install -y ca-certificates git openssh-client inotify-tools locales tzdata && rm -rf /var/lib/apt/lists/*
+ARG GH_VERSION=2.98.0
+RUN apt-get update && apt-get install -y ca-certificates curl git openssh-client inotify-tools locales tzdata && rm -rf /var/lib/apt/lists/*
+RUN arch="$(dpkg --print-architecture)" \
+    && curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${arch}.tar.gz" -o /tmp/gh.tar.gz \
+    && tar -xzf /tmp/gh.tar.gz -C /tmp \
+    && install -m 0755 "/tmp/gh_${GH_VERSION}_linux_${arch}/bin/gh" /usr/local/bin/gh \
+    && rm -rf /tmp/gh.tar.gz "/tmp/gh_${GH_VERSION}_linux_${arch}" \
+    && gh --version
 RUN sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen && locale-gen
 RUN npm install -g @openai/codex@${CODEX_NPM_VERSION}
 
