@@ -751,12 +751,12 @@ defmodule SymphonyEx.AgentRunnerTest do
       )
 
     assert result.status == :failed
-    assert result.error_category == "required_pr_missing"
-    assert result.error =~ "material workspace changes"
+    assert result.error_category == "required_pr_uncommitted_changes"
+    assert result.error =~ "uncommitted material workspace changes"
 
     assert {:ok, session} = SessionStore.load(workspace_path)
     assert session.phase == :failed
-    assert session.error_category == "required_pr_missing"
+    assert session.error_category == "required_pr_uncommitted_changes"
     assert File.read!(Path.join(workspace_path, "changed.txt")) == "uncommitted change\n"
   end
 
@@ -771,7 +771,8 @@ defmodule SymphonyEx.AgentRunnerTest do
     }
 
     init_git_repo!(workspace_path)
-    File.write!(Path.join(workspace_path, "changed.txt"), "uncommitted change\n")
+    File.write!(Path.join(workspace_path, "changed.txt"), "committed change\n")
+    head_sha = commit_workspace_change!(workspace_path)
 
     Application.put_env(:symphony_ex, :agent_runner_issue_pr_fetcher, fn _issue ->
       {:ok,
@@ -779,7 +780,7 @@ defmodule SymphonyEx.AgentRunnerTest do
          %{
            "number" => 27,
            "body" => "Closes #313",
-           "headRefName" => "fix/issue-313-release-gate"
+           "head" => %{"ref" => "fix/issue-313-release-gate", "sha" => head_sha}
          }
        ]}
     end)
@@ -797,6 +798,121 @@ defmodule SymphonyEx.AgentRunnerTest do
       )
 
     assert result.status == :success
+  end
+
+  test "rejects a related PR whose head does not contain the workspace commit" do
+    workspace_path = tmp_workspace("required-pr-head-mismatch")
+    workflow_path = write_workflow(workspace_path)
+    issue = issue_fixture("315")
+
+    init_git_repo!(workspace_path)
+    File.write!(Path.join(workspace_path, "changed.txt"), "committed but not pushed\n")
+    _head_sha = commit_workspace_change!(workspace_path)
+
+    Application.put_env(:symphony_ex, :agent_runner_issue_pr_fetcher, fn _issue ->
+      {:ok,
+       [
+         %{
+           "number" => 29,
+           "body" => "Closes #315",
+           "head" => %{"ref" => "fix/issue-315-existing-pr", "sha" => String.duplicate("0", 40)}
+         }
+       ]}
+    end)
+
+    on_exit(fn ->
+      Application.delete_env(:symphony_ex, :agent_runner_issue_pr_fetcher)
+    end)
+
+    result =
+      AgentRunner.run(issue,
+        workspace_path: workspace_path,
+        workflow_path: workflow_path,
+        codex: [command: "codex app-server"],
+        app_server: MockAppServer
+      )
+
+    assert result.status == :failed
+    assert result.error_category == "required_pr_head_mismatch"
+  end
+
+  test "matches a hyphen-suffixed issue branch without matching a longer issue number" do
+    workspace_path = tmp_workspace("required-pr-branch-boundary")
+    workflow_path = write_workflow(workspace_path)
+    issue = issue_fixture("27")
+
+    init_git_repo!(workspace_path)
+    File.write!(Path.join(workspace_path, "changed.txt"), "committed change\n")
+    head_sha = commit_workspace_change!(workspace_path)
+
+    Application.put_env(:symphony_ex, :agent_runner_issue_pr_fetcher, fn _issue ->
+      {:ok,
+       [
+         %{
+           "number" => 270,
+           "body" => "",
+           "head" => %{"ref" => "fix/issue-270-unrelated", "sha" => head_sha}
+         },
+         %{
+           "number" => 27,
+           "body" => "",
+           "head" => %{
+             "ref" => "fix/issue-27-interrupted-turn-pr-guard",
+             "sha" => head_sha
+           }
+         }
+       ]}
+    end)
+
+    on_exit(fn ->
+      Application.delete_env(:symphony_ex, :agent_runner_issue_pr_fetcher)
+    end)
+
+    result =
+      AgentRunner.run(issue,
+        workspace_path: workspace_path,
+        workflow_path: workflow_path,
+        codex: [command: "codex app-server"],
+        app_server: MockAppServer
+      )
+
+    assert result.status == :success
+  end
+
+  test "rejects dirty uncommitted changes even when a related PR already exists" do
+    workspace_path = tmp_workspace("required-pr-dirty-existing")
+    workflow_path = write_workflow(workspace_path)
+    issue = issue_fixture("314")
+
+    init_git_repo!(workspace_path)
+    File.write!(Path.join(workspace_path, "changed.txt"), "not in the PR\n")
+
+    Application.put_env(:symphony_ex, :agent_runner_issue_pr_fetcher, fn _issue ->
+      {:ok,
+       [
+         %{
+           "number" => 28,
+           "body" => "Closes #314",
+           "headRefName" => "fix/issue-314-existing-pr"
+         }
+       ]}
+    end)
+
+    on_exit(fn ->
+      Application.delete_env(:symphony_ex, :agent_runner_issue_pr_fetcher)
+    end)
+
+    result =
+      AgentRunner.run(issue,
+        workspace_path: workspace_path,
+        workflow_path: workflow_path,
+        codex: [command: "codex app-server"],
+        app_server: MockAppServer
+      )
+
+    assert result.status == :failed
+    assert result.error_category == "required_pr_uncommitted_changes"
+    assert File.exists?(Path.join(workspace_path, "changed.txt"))
   end
 
   test "ignores Symphony and gstack runtime artifacts when enforcing PR evidence" do
@@ -1054,12 +1170,31 @@ defmodule SymphonyEx.AgentRunnerTest do
       ["config", "user.name", "Symphony Test"],
       ["config", "user.email", "symphony-test@example.com"],
       ["add", "WORKFLOW.md"],
-      ["commit", "-m", "test baseline"]
+      ["commit", "-m", "test baseline"],
+      ["update-ref", "refs/remotes/origin/main", "HEAD"],
+      ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]
     ]
 
     Enum.each(commands, fn args ->
       assert {_output, 0} = System.cmd("git", args, cd: workspace_path, stderr_to_stdout: true)
     end)
+  end
+
+  defp commit_workspace_change!(workspace_path) do
+    assert {_output, 0} =
+             System.cmd("git", ["add", "changed.txt"],
+               cd: workspace_path,
+               stderr_to_stdout: true
+             )
+
+    assert {_output, 0} =
+             System.cmd("git", ["commit", "-m", "test workspace change"],
+               cd: workspace_path,
+               stderr_to_stdout: true
+             )
+
+    {sha, 0} = System.cmd("git", ["rev-parse", "HEAD"], cd: workspace_path)
+    String.trim(sha)
   end
 
   defp tmp_workspace(name) do

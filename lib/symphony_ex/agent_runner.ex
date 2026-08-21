@@ -616,14 +616,19 @@ defmodule SymphonyEx.AgentRunner do
 
   @spec verify_required_pr(Issue.t(), Path.t()) :: :ok | {:error, String.t(), String.t()}
   defp verify_required_pr(%Issue{} = issue, workspace_path) do
-    case material_workspace_changes?(workspace_path) do
-      {:ok, false} ->
+    case material_workspace_changes(workspace_path) do
+      {:ok, :clean} ->
         :ok
 
-      {:ok, true} ->
+      {:ok, :dirty} ->
+        {:error,
+         "Agent left uncommitted material workspace changes; preserve the worktree and commit/push them before reporting success",
+         "required_pr_uncommitted_changes"}
+
+      {:ok, {:committed, head_sha}} ->
         issue
         |> fetch_issue_prs()
-        |> verify_related_pr_exists(issue)
+        |> verify_related_pr_contains_head(issue, head_sha)
 
       {:error, :not_a_git_repository} ->
         :ok
@@ -635,25 +640,37 @@ defmodule SymphonyEx.AgentRunner do
     end
   end
 
-  @spec verify_related_pr_exists({:ok, [map()]} | {:error, term()}, Issue.t()) ::
-          :ok | {:error, String.t(), String.t()}
-  defp verify_related_pr_exists({:ok, prs}, issue) do
-    if pr_exists_for_issue(issue, prs) do
-      :ok
-    else
-      {:error,
-       "Agent left material workspace changes without a related pull request; preserve the worktree and create a PR before reporting success",
-       "required_pr_missing"}
+  @spec verify_related_pr_contains_head(
+          {:ok, [map()]} | {:error, term()},
+          Issue.t(),
+          String.t()
+        ) :: :ok | {:error, String.t(), String.t()}
+  defp verify_related_pr_contains_head({:ok, prs}, issue, head_sha) do
+    case Enum.find(prs, &related_pr_matches_issue?(&1, issue)) do
+      nil ->
+        {:error,
+         "Agent created commits without a related pull request; preserve the worktree and create a PR before reporting success",
+         "required_pr_missing"}
+
+      pr ->
+        if pr_head_sha(pr) == head_sha do
+          :ok
+        else
+          {:error,
+           "Related pull request head does not contain the workspace HEAD #{head_sha}; preserve the worktree and push the commit before reporting success",
+           "required_pr_head_mismatch"}
+        end
     end
   end
 
-  defp verify_related_pr_exists({:error, reason}, _issue) do
-    {:error, "Material workspace changes exist, but PR verification failed: #{inspect(reason)}",
+  defp verify_related_pr_contains_head({:error, reason}, _issue, _head_sha) do
+    {:error, "Committed workspace changes exist, but PR verification failed: #{inspect(reason)}",
      "required_pr_unverified"}
   end
 
-  @spec material_workspace_changes?(Path.t()) :: {:ok, boolean()} | {:error, term()}
-  defp material_workspace_changes?(workspace_path) do
+  @spec material_workspace_changes(Path.t()) ::
+          {:ok, :clean | :dirty | {:committed, String.t()}} | {:error, term()}
+  defp material_workspace_changes(workspace_path) do
     case System.cmd("git", ["status", "--porcelain=v1", "--untracked-files=all"],
            cd: workspace_path,
            stderr_to_stdout: true
@@ -665,7 +682,11 @@ defmodule SymphonyEx.AgentRunner do
           |> Enum.map(&status_path/1)
           |> Enum.any?(&(not runtime_artifact_path?(&1)))
 
-        {:ok, status_changes? or commits_ahead_of_default?(workspace_path)}
+        cond do
+          status_changes? -> {:ok, :dirty}
+          commits_ahead_of_default?(workspace_path) -> workspace_head(workspace_path)
+          true -> {:ok, :clean}
+        end
 
       {output, _code} ->
         if String.contains?(String.downcase(output), "not a git repository") do
@@ -691,6 +712,14 @@ defmodule SymphonyEx.AgentRunner do
     Enum.any?(@runtime_artifact_paths, fn runtime_path ->
       path == runtime_path or String.starts_with?(path, runtime_path <> "/")
     end)
+  end
+
+  @spec workspace_head(Path.t()) :: {:ok, {:committed, String.t()}} | {:error, term()}
+  defp workspace_head(workspace_path) do
+    case System.cmd("git", ["rev-parse", "HEAD"], cd: workspace_path, stderr_to_stdout: true) do
+      {sha, 0} -> {:ok, {:committed, String.trim(sha)}}
+      {output, _code} -> {:error, String.trim(output)}
+    end
   end
 
   @spec commits_ahead_of_default?(Path.t()) :: boolean()
@@ -851,7 +880,14 @@ defmodule SymphonyEx.AgentRunner do
   end
 
   @spec default_fetch_issue_prs(Issue.t()) :: {:ok, [map()]} | {:error, term()}
-  defp default_fetch_issue_prs(%Issue{} = _issue) do
+  defp default_fetch_issue_prs(%Issue{target_pr: target_pr}) when is_integer(target_pr) do
+    case Client.fetch_pull_request(target_pr, github_client_opts()) do
+      {:ok, pr} -> {:ok, [pr]}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp default_fetch_issue_prs(%Issue{}) do
     Client.list_pull_requests(github_client_opts())
   end
 
@@ -895,7 +931,12 @@ defmodule SymphonyEx.AgentRunner do
 
   @spec branch_references_issue?(String.t(), String.t()) :: boolean()
   defp branch_references_issue?(head_ref, issue_number) do
-    Regex.match?(~r/issue-#{Regex.escape(issue_number)}(?![0-9A-Za-z_-])/i, head_ref)
+    Regex.match?(~r/issue-#{Regex.escape(issue_number)}(?![0-9A-Za-z])/i, head_ref)
+  end
+
+  @spec pr_head_sha(map()) :: String.t() | nil
+  defp pr_head_sha(pr) do
+    get_in(pr, ["head", "sha"]) || pr["headRefOid"] || pr["head_sha"]
   end
 
   @spec github_client_opts() :: keyword()
