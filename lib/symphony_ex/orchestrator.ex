@@ -712,12 +712,16 @@ defmodule SymphonyEx.Orchestrator do
       state
       |> maybe_post_completion_summary(issue, metadata)
       |> persist_run_state(issue, :released, attempt, %{
-        result: :failed,
+        result: released_result(result),
         details: inspect(result)
       })
       |> clear_issue_retry_state(issue, attempt, metadata)
     end
   end
+
+  @spec released_result(term()) :: :failed | :cancelled
+  defp released_result(%{status: :cancelled}), do: :cancelled
+  defp released_result(_result), do: :failed
 
   @non_retryable_error_categories MapSet.new([
                                     "missing_skill_reference"

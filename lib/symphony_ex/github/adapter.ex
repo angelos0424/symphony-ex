@@ -1623,7 +1623,8 @@ defmodule SymphonyEx.GitHub.Adapter do
         {:ok, item} ->
           current_status = project_item_status(item)
 
-          if project_status_regression?(current_status, desired_status) do
+          if project_status_regression?(current_status, desired_status) and
+               not lifecycle_allows_status_regression?(attrs) do
             :ok
           else
             sync_project_field(item, "Status", desired_status, opts)
@@ -1637,6 +1638,13 @@ defmodule SymphonyEx.GitHub.Adapter do
       end
     end
   end
+
+  @spec lifecycle_allows_status_regression?(map()) :: boolean()
+  defp lifecycle_allows_status_regression?(%{status: :released, result: result})
+       when result in [:failed, :cancelled],
+       do: true
+
+  defp lifecycle_allows_status_regression?(_attrs), do: false
 
   @spec project_status_regression?(String.t() | nil, String.t()) :: boolean()
   defp project_status_regression?(current_status, desired_status) do
