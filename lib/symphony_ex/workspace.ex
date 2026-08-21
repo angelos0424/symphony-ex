@@ -255,6 +255,7 @@ defmodule SymphonyEx.Workspace do
           {:ok, prepare_reason()} | {:error, term()}
   defp evaluate_existing_session(_path, session) when is_map_key(session, :phase) do
     cond do
+      session.phase == :failed -> {:ok, {:recover, session}}
       SessionStore.recoverable?(session) -> {:ok, {:recover, session}}
       session.phase == :completed -> {:ok, {:reset, :completed_session}}
       session.recovery_count > 3 -> {:ok, {:reset, :recovery_limit_exhausted}}

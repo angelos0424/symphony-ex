@@ -73,6 +73,54 @@ defmodule SymphonyEx.WorkspaceTest do
     assert File.exists?(SessionStore.session_path(path))
   end
 
+  test "prepare preserves a failed workspace even when the Codex thread cannot be reused" do
+    root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-workspace-test-#{System.unique_integer([:positive])}"
+      )
+
+    source_repo_path = Path.join(root, "source")
+
+    issue = %Issue{
+      id: "1",
+      identifier: "SYM-FAILED",
+      title: "Title",
+      description: "",
+      state: "Todo"
+    }
+
+    path = Workspace.path_for_issue(root, issue)
+
+    File.mkdir_p!(source_repo_path)
+    File.mkdir_p!(path)
+    File.write!(Path.join(path, "uncommitted.txt"), "preserve me")
+
+    assert {:ok, session} =
+             SessionStore.save(path, %{
+               thread_id: "thread-nonreusable",
+               turns_executed: 1,
+               capability_profile: %{supports_thread_reuse: false},
+               recovery_count: 0,
+               phase: :failed,
+               error_category: "required_pr_uncommitted_changes"
+             })
+
+    shell = fn _cmd, _args, _opts ->
+      flunk("git should not reset a failed workspace")
+    end
+
+    assert {:ok, %{path: ^path, reason: {:recover, recovered}}} =
+             Workspace.prepare(issue,
+               root: root,
+               source_repo_path: source_repo_path,
+               shell_fun: shell
+             )
+
+    assert recovered.session_id == session.session_id
+    assert File.read!(Path.join(path, "uncommitted.txt")) == "preserve me"
+  end
+
   test "prepare deletes completed session breadcrumbs before recreating a worktree" do
     root =
       Path.join(
