@@ -646,20 +646,21 @@ defmodule SymphonyEx.AgentRunner do
           String.t()
         ) :: :ok | {:error, String.t(), String.t()}
   defp verify_related_pr_contains_head({:ok, prs}, issue, head_sha) do
-    case Enum.find(prs, &related_pr_matches_issue?(&1, issue)) do
-      nil ->
+    related_prs = Enum.filter(prs, &related_pr_matches_issue?(&1, issue))
+
+    cond do
+      related_prs == [] ->
         {:error,
          "Agent created commits without a related pull request; preserve the worktree and create a PR before reporting success",
          "required_pr_missing"}
 
-      pr ->
-        if pr_head_sha(pr) == head_sha do
-          :ok
-        else
-          {:error,
-           "Related pull request head does not contain the workspace HEAD #{head_sha}; preserve the worktree and push the commit before reporting success",
-           "required_pr_head_mismatch"}
-        end
+      Enum.any?(related_prs, &(pr_head_sha(&1) == head_sha)) ->
+        :ok
+
+      true ->
+        {:error,
+         "No related pull request head contains the workspace HEAD #{head_sha}; preserve the worktree and push the commit before reporting success",
+         "required_pr_head_mismatch"}
     end
   end
 

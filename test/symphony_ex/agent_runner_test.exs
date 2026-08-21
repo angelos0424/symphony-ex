@@ -778,6 +778,14 @@ defmodule SymphonyEx.AgentRunnerTest do
       {:ok,
        [
          %{
+           "number" => 26,
+           "body" => "Closes #313",
+           "head" => %{
+             "ref" => "fix/issue-313-stale-attempt",
+             "sha" => String.duplicate("f", 40)
+           }
+         },
+         %{
            "number" => 27,
            "body" => "Closes #313",
            "head" => %{"ref" => "fix/issue-313-release-gate", "sha" => head_sha}
