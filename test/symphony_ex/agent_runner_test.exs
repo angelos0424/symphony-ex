@@ -726,6 +726,107 @@ defmodule SymphonyEx.AgentRunnerTest do
     assert result.turn_id == "turn-last-message"
   end
 
+  test "fails a completed file-changing run when no related PR exists" do
+    workspace_path = tmp_workspace("required-pr-missing")
+    workflow_path = write_workflow(workspace_path)
+    issue = issue_fixture("SYM-310A")
+
+    init_git_repo!(workspace_path)
+    File.write!(Path.join(workspace_path, "changed.txt"), "uncommitted change\n")
+
+    Application.put_env(:symphony_ex, :agent_runner_issue_pr_fetcher, fn _issue ->
+      {:ok, []}
+    end)
+
+    on_exit(fn ->
+      Application.delete_env(:symphony_ex, :agent_runner_issue_pr_fetcher)
+    end)
+
+    result =
+      AgentRunner.run(issue,
+        workspace_path: workspace_path,
+        workflow_path: workflow_path,
+        codex: [command: "codex app-server"],
+        app_server: MockAppServer
+      )
+
+    assert result.status == :failed
+    assert result.error_category == "required_pr_missing"
+    assert result.error =~ "material workspace changes"
+
+    assert {:ok, session} = SessionStore.load(workspace_path)
+    assert session.phase == :failed
+    assert session.error_category == "required_pr_missing"
+    assert File.read!(Path.join(workspace_path, "changed.txt")) == "uncommitted change\n"
+  end
+
+  test "accepts a file-changing run when a PR closes the issue even if Target-Branch is main" do
+    workspace_path = tmp_workspace("required-pr-present")
+    workflow_path = write_workflow(workspace_path)
+
+    issue = %Issue{
+      issue_fixture("313")
+      | target_branch: "main",
+        description: "Target-Branch: main\n\nCreate a PR"
+    }
+
+    init_git_repo!(workspace_path)
+    File.write!(Path.join(workspace_path, "changed.txt"), "uncommitted change\n")
+
+    Application.put_env(:symphony_ex, :agent_runner_issue_pr_fetcher, fn _issue ->
+      {:ok,
+       [
+         %{
+           "number" => 27,
+           "body" => "Closes #313",
+           "headRefName" => "fix/issue-313-release-gate"
+         }
+       ]}
+    end)
+
+    on_exit(fn ->
+      Application.delete_env(:symphony_ex, :agent_runner_issue_pr_fetcher)
+    end)
+
+    result =
+      AgentRunner.run(issue,
+        workspace_path: workspace_path,
+        workflow_path: workflow_path,
+        codex: [command: "codex app-server"],
+        app_server: MockAppServer
+      )
+
+    assert result.status == :success
+  end
+
+  test "ignores Symphony and gstack runtime artifacts when enforcing PR evidence" do
+    workspace_path = tmp_workspace("required-pr-runtime-artifacts")
+    workflow_path = write_workflow(workspace_path)
+    issue = issue_fixture("SYM-310B")
+
+    init_git_repo!(workspace_path)
+    File.mkdir_p!(Path.join(workspace_path, ".agents/skills"))
+    File.write!(Path.join(workspace_path, ".agents/skills/runtime.txt"), "runtime\n")
+
+    Application.put_env(:symphony_ex, :agent_runner_issue_pr_fetcher, fn _issue ->
+      {:ok, []}
+    end)
+
+    on_exit(fn ->
+      Application.delete_env(:symphony_ex, :agent_runner_issue_pr_fetcher)
+    end)
+
+    result =
+      AgentRunner.run(issue,
+        workspace_path: workspace_path,
+        workflow_path: workflow_path,
+        codex: [command: "codex app-server"],
+        app_server: MockAppServer
+      )
+
+    assert result.status == :success
+  end
+
   test "fails success verification when issue body update was required but not performed" do
     workspace_path = tmp_workspace("required-body-update")
     workflow_path = write_workflow(workspace_path)
@@ -945,6 +1046,20 @@ defmodule SymphonyEx.AgentRunnerTest do
     File.mkdir_p!(workspace_path)
     File.write!(workflow_path, "Task: <%= issue.title %>\n")
     workflow_path
+  end
+
+  defp init_git_repo!(workspace_path) do
+    commands = [
+      ["init", "-b", "main"],
+      ["config", "user.name", "Symphony Test"],
+      ["config", "user.email", "symphony-test@example.com"],
+      ["add", "WORKFLOW.md"],
+      ["commit", "-m", "test baseline"]
+    ]
+
+    Enum.each(commands, fn args ->
+      assert {_output, 0} = System.cmd("git", args, cd: workspace_path, stderr_to_stdout: true)
+    end)
   end
 
   defp tmp_workspace(name) do

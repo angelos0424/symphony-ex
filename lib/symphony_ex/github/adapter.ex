@@ -1337,7 +1337,8 @@ defmodule SymphonyEx.GitHub.Adapter do
       pr["mergeable_state"] not in [nil, "clean"] ->
         {:blocked, ["PR mergeable_state is #{inspect(pr["mergeable_state"])}."]}
 
-      issue.target_branch && pr_head_ref(pr) != issue.target_branch ->
+      (is_integer(issue.target_pr) and issue.target_branch) &&
+          pr_head_ref(pr) != issue.target_branch ->
         {:blocked,
          [
            "PR head branch #{inspect(pr_head_ref(pr))} does not match Target-Branch #{inspect(issue.target_branch)}."

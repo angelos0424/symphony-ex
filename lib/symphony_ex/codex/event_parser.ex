@@ -47,7 +47,26 @@ defmodule SymphonyEx.Codex.EventParser do
     # Check direct method mapping
     case Map.get(@event_map, normalized) do
       nil -> classify_from_params(normalized, params)
-      event -> maybe_reclassify_item_event(event, params)
+      event -> event |> maybe_reclassify_item_event(params) |> maybe_reclassify_turn_event(params)
+    end
+  end
+
+  @spec maybe_reclassify_turn_event(Events.event_name(), map()) :: Events.event_name()
+  defp maybe_reclassify_turn_event(:turn_completed, params) do
+    case turn_status(params) do
+      "interrupted" -> :turn_cancelled
+      "failed" -> :turn_failed
+      _status -> :turn_completed
+    end
+  end
+
+  defp maybe_reclassify_turn_event(event, _params), do: event
+
+  @spec turn_status(map()) :: String.t() | nil
+  defp turn_status(params) do
+    case get_in(params, ["turn", "status"]) || params["status"] do
+      status when is_binary(status) -> String.downcase(status)
+      _other -> nil
     end
   end
 
@@ -98,8 +117,13 @@ defmodule SymphonyEx.Codex.EventParser do
   @spec extract_message(map()) :: String.t() | nil
   defp extract_message(params) do
     params["message"] || params["content"] || params["text"] ||
-      get_in(params, ["data", "message"]) || get_in(params, ["data", "content"])
+      get_in(params, ["data", "message"]) || get_in(params, ["data", "content"]) ||
+      get_in(params, ["turn", "error", "message"]) || turn_status_message(turn_status(params))
   end
+
+  defp turn_status_message("interrupted"), do: "Turn interrupted"
+  defp turn_status_message("failed"), do: "Turn failed"
+  defp turn_status_message(_status), do: nil
 
   @spec extract_usage(map()) :: Events.usage() | nil
   defp extract_usage(%{"usage" => %{} = usage}) do
