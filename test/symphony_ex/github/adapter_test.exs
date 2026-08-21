@@ -2266,7 +2266,8 @@ defmodule SymphonyEx.GitHub.AdapterTest do
       assert Lifecycle.resolve_project_status(lc, :running, nil) == "In Progress"
       assert Lifecycle.resolve_project_status(lc, :retry_queued, nil) == "Todo"
       assert Lifecycle.resolve_project_status(lc, :released, :success) == "In Review"
-      assert Lifecycle.resolve_project_status(lc, :released, :failed) == "In Review"
+      assert Lifecycle.resolve_project_status(lc, :released, :failed) == "Todo"
+      assert Lifecycle.resolve_project_status(lc, :released, :cancelled) == "Todo"
     end
   end
 

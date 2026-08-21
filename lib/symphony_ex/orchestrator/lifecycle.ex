@@ -48,7 +48,9 @@ defmodule SymphonyEx.Orchestrator.Lifecycle do
               {:running, :any} => "In Progress",
               {:retry_queued, :any} => "Todo",
               {:released, :success} => "In Review",
-              {:released, :any} => "In Review"
+              {:released, :failed} => "Todo",
+              {:released, :cancelled} => "Todo",
+              {:released, :any} => "Todo"
             },
             project_field_mapping: %{}
 
