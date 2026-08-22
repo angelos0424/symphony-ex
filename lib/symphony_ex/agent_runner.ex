@@ -330,24 +330,33 @@ defmodule SymphonyEx.AgentRunner do
             :ok =
               RunEventLogger.log_app_event(ctx.workspace_path, ctx.issue, ctx.thread_id, event)
 
-            case event.event do
-              :turn_completed ->
-                elapsed = System.monotonic_time(:millisecond) - (ctx.deadline - ctx.stall_timeout)
-                result = build_result(ctx, :success, nil, nil)
-                Telemetry.emit_turn_completed(ctx.issue.identifier, elapsed, result.status)
-                result
+            if Events.terminal?(event) and not event_belongs_to_thread?(event, ctx.thread_id) do
+              # Codex emits terminal events for spawned subagent threads on the same
+              # app-server stream. They are activity, but only the root thread may
+              # finish the issue run.
+              do_wait(ctx, now)
+            else
+              case event.event do
+                :turn_completed ->
+                  elapsed =
+                    System.monotonic_time(:millisecond) - (ctx.deadline - ctx.stall_timeout)
 
-              :turn_failed ->
-                Telemetry.emit_turn_completed(ctx.issue.identifier, nil, :failed)
-                build_result(ctx, :failed, event.message, "turn_failed")
+                  result = build_result(ctx, :success, nil, nil)
+                  Telemetry.emit_turn_completed(ctx.issue.identifier, elapsed, result.status)
+                  result
 
-              :turn_cancelled ->
-                Telemetry.emit_turn_completed(ctx.issue.identifier, nil, :cancelled)
-                build_result(ctx, :cancelled, event.message, "turn_cancelled")
+                :turn_failed ->
+                  Telemetry.emit_turn_completed(ctx.issue.identifier, nil, :failed)
+                  build_result(ctx, :failed, event.message, "turn_failed")
 
-              _ ->
-                # Update last activity timestamp for non-terminal events
-                do_wait(ctx, now)
+                :turn_cancelled ->
+                  Telemetry.emit_turn_completed(ctx.issue.identifier, nil, :cancelled)
+                  build_result(ctx, :cancelled, event.message, "turn_cancelled")
+
+                _ ->
+                  # Update last activity timestamp for non-terminal events
+                  do_wait(ctx, now)
+              end
             end
         after
           wait_ms ->
@@ -367,9 +376,10 @@ defmodule SymphonyEx.AgentRunner do
     finished_at_ms = System.system_time(:millisecond)
     elapsed_ms = max(finished_at_ms - started_at_ms, 0)
     events = safe_get_events(ctx.app_server, ctx.server)
-    last_message = extract_last_message(events)
-    last_event = extract_last_event_name(events)
-    turn_id = extract_last_turn_id(events) || session.turn_id
+    thread_events = Enum.filter(events, &event_belongs_to_thread?(&1, ctx.thread_id))
+    last_message = extract_last_message(thread_events)
+    last_event = extract_last_event_name(thread_events)
+    turn_id = extract_last_turn_id(thread_events) || session.turn_id
 
     result =
       %{
@@ -385,7 +395,7 @@ defmodule SymphonyEx.AgentRunner do
         last_event: last_event,
         elapsed_ms: elapsed_ms
       }
-      |> validate_success_result(events, ctx.issue, ctx.workspace_path)
+      |> validate_success_result(thread_events, ctx.issue, ctx.workspace_path)
 
     persist_terminal_session(
       ctx.workspace_path,
@@ -429,7 +439,7 @@ defmodule SymphonyEx.AgentRunner do
         error_category: result.error_category,
         last_message: result.last_message,
         last_event: last_event,
-        usage: extract_last_usage(events)
+        usage: extract_last_usage(thread_events)
       })
 
     Telemetry.emit_run_finished(ctx.issue.identifier, result.status, elapsed_ms)
@@ -507,6 +517,22 @@ defmodule SymphonyEx.AgentRunner do
 
   defp classify_prestart_failure(reason), do: {inspect(reason), "startup_failed"}
 
+  @spec event_belongs_to_thread?(Events.t(), String.t() | nil) :: boolean()
+  defp event_belongs_to_thread?(%Events{} = event, thread_id) do
+    case event_thread_id(event) do
+      nil -> true
+      event_thread_id -> event_thread_id == thread_id
+    end
+  end
+
+  @spec event_thread_id(Events.t()) :: String.t() | nil
+  defp event_thread_id(%Events{params: %{} = params}) do
+    params["threadId"] || params["thread_id"] || params[:thread_id] ||
+      get_in(params, ["thread", "id"])
+  end
+
+  defp event_thread_id(_event), do: nil
+
   @spec extract_last_message([Events.t()]) :: String.t() | nil
   defp extract_last_message(events) do
     events
@@ -545,8 +571,12 @@ defmodule SymphonyEx.AgentRunner do
     events
     |> Enum.reverse()
     |> Enum.find_value(fn
-      %Events{params: %{} = params} -> params["turnId"] || params["turn_id"]
-      _ -> nil
+      %Events{params: %{} = params} ->
+        params["turnId"] || params["turn_id"] || params[:turn_id] ||
+          get_in(params, ["turn", "id"])
+
+      _ ->
+        nil
     end)
   end
 
