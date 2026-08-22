@@ -396,6 +396,50 @@ defmodule SymphonyEx.AgentRunnerTest do
     def get_events(server), do: Agent.get(server, & &1.events)
   end
 
+  defmodule ChildThreadCompletionAppServer do
+    use Agent
+
+    def start_link(_opts), do: Agent.start_link(fn -> %{events: []} end)
+    def subscribe(_server, _pid \\ self()), do: :ok
+    def initialize(_server), do: {:ok, %{"supportsThreadReuse" => true, "supportsEvents" => true}}
+    def capabilities(_server), do: %{supports_thread_reuse: true, supports_events: true}
+    def start_thread(_server, _params), do: {:ok, %{"threadId" => "thread-parent"}}
+    def alive?(_server), do: true
+    def cancel_turn(_server), do: :ok
+    def shutdown(server), do: Agent.stop(server, :normal, 1_000)
+
+    def start_turn(server, _params) do
+      child_completed = %Events{
+        event: :turn_completed,
+        timestamp: DateTime.utc_now() |> DateTime.to_iso8601(),
+        raw_method: "turn/completed",
+        message: "child coverage summary",
+        params: %{
+          "threadId" => "thread-child",
+          "turn" => %{"id" => "turn-child", "status" => "completed"}
+        }
+      }
+
+      parent_completed = %Events{
+        event: :turn_completed,
+        timestamp: DateTime.utc_now() |> DateTime.to_iso8601(),
+        raw_method: "turn/completed",
+        message: "parent delivery summary",
+        params: %{
+          "threadId" => "thread-parent",
+          "turn" => %{"id" => "turn-parent", "status" => "completed"}
+        }
+      }
+
+      Agent.update(server, fn _state -> %{events: [child_completed, parent_completed]} end)
+      send(self(), {:app_server_event, child_completed})
+      send(self(), {:app_server_event, parent_completed})
+      {:ok, %{"turnId" => "turn-parent"}}
+    end
+
+    def get_events(server), do: Agent.get(server, & &1.events)
+  end
+
   test "reuses recoverable thread metadata and clears session file on success" do
     workspace_path = tmp_workspace("recovery-success")
     workflow_path = write_workflow(workspace_path)
@@ -442,6 +486,37 @@ defmodule SymphonyEx.AgentRunnerTest do
     assert run_finished["turn_id"] == "turn-123"
     assert is_integer(run_finished["elapsed_ms"])
     assert File.exists?(Path.join(workspace_path, ".symphony-run-events.ndjson"))
+  end
+
+  test "waits for the parent turn when a child agent completes first" do
+    workspace_path = tmp_workspace("child-thread-completion")
+    workflow_path = write_workflow(workspace_path)
+    issue = issue_fixture("SYM-CHILD-1")
+
+    result =
+      AgentRunner.run(issue,
+        workspace_path: workspace_path,
+        workflow_path: workflow_path,
+        codex: [command: "mock-codex"],
+        app_server: ChildThreadCompletionAppServer
+      )
+
+    assert result.status == :success
+    assert result.thread_id == "thread-parent"
+    assert result.turn_id == "turn-parent"
+    assert result.last_message == "parent delivery summary"
+
+    events = read_events!(workspace_path)
+
+    assert Enum.any?(events, fn event ->
+             event["event"] == "turn_completed" and
+               get_in(event, ["params", "threadId"]) == "thread-child"
+           end)
+
+    assert Enum.any?(events, fn event ->
+             event["event"] == "turn_completed" and
+               get_in(event, ["params", "threadId"]) == "thread-parent"
+           end)
   end
 
   test "writes failed breadcrumbs when startup fails before a turn completes" do
