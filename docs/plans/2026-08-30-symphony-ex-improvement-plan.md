@@ -89,12 +89,14 @@ git worktree prune --dry-run
 
 현재 후속 활성 작업:
 
-- `PR-1A-FU / TRUST-01·02` — **Review**
+- `PR-1A-FU / TRUST-01·02` — **Done**
 - Issue: [#34](https://github.com/angelos0424/symphony-ex/issues/34)
 - Parent PR: [#33](https://github.com/angelos0424/symphony-ex/pull/33)
 - PR: [#35](https://github.com/angelos0424/symphony-ex/pull/35)
-- 검증 head: `1246303e9ad2169e709b188a30371b81f96db44a`
-- 다음 정확한 작업: 위 PR head에서 spec-compliance review와 code-quality/security review 수행 후 merge 판단
+- 구현/리뷰/merge: 완료
+- merge commit: `d7a64c14352e48611a7fced969f3ab99587191e2`
+- main 검증: `d7a64c14352e48611a7fced969f3ab99587191e2`에서 format PASS, focused `60 tests/0 failures`, full `227 tests/0 failures`; GitHub Actions workflow 없음
+- 다음 정확한 작업: `PR-1B / TRUST-03`을 새 GitHub Issue로 등록하고, Issue 기준 branch에서만 pick/구현 시작
 
 ## 3. 설계 원칙
 
@@ -135,8 +137,8 @@ git worktree prune --dry-run
 | SEC-03 | Todo | PR-0 | `check_origin`·배포 예시 강화 | `symphony_ex.ex`, `DEPLOY.md` |
 | TRUST-01 | Done | PR-1A | Issue author/association domain 필드 | `domain/issue.ex`, `github/adapter.ex` |
 | TRUST-02 | Done | PR-1A | Trusted association/actor gate | `automation.ex`, `config/schema.ex`, `orchestrator.ex` |
-| TRUST-01-FU | Review | PR-1A-FU | lifecycle-comments 비활성 시 gated record write-back | `github/adapter.ex`, adapter tests |
-| TRUST-02-FU | Review | PR-1A-FU | `Gated only` dashboard queue filter | `dashboard_live.ex`, dashboard tests |
+| TRUST-01-FU | Done | PR-1A-FU | lifecycle-comments 비활성 시 gated record write-back | `github/adapter.ex`, adapter tests |
+| TRUST-02-FU | Done | PR-1A-FU | `Gated only` dashboard queue filter | `dashboard_live.ex`, dashboard tests |
 | TRUST-03 | Todo | PR-1B | Agent/orchestrator token 분리 | `config.ex`, `github/client.ex`, app-server, Docker env/entrypoint |
 | TRUST-04 | Todo | PR-1C | Non-root container·sandbox·health migration | `Dockerfile`, Compose, workflows |
 | CTRL-01 | Todo | PR-2 | Active-run restart guard | `runtime_control.ex`, `orchestrator.ex` |
