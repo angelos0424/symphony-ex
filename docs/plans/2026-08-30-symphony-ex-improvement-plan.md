@@ -77,14 +77,15 @@ git worktree prune --dry-run
 
 현재 활성 작업:
 
-- `PR-1A / TRUST-01·02` — **Review**
+- `PR-1A / TRUST-01·02` — **Done**
 - Issue: [#32](https://github.com/angelos0424/symphony-ex/issues/32)
-- 구현: 로컬 구현 및 테스트 완료
+- 구현/리뷰/merge: 완료
 - PR: [#33](https://github.com/angelos0424/symphony-ex/pull/33)
-- 검증 head: `fce1994`
-- 다음 정확한 작업: 위 PR head에서 spec-compliance review와 code-quality/security review 수행 후 merge 판단
+- merge commit: `0ddbc0558d31392d18279c9b596f7a6820b90cf4`
+- main 검증: `0ddbc0558d31392d18279c9b596f7a6820b90cf4`에서 format PASS, focused `67 tests/0 failures`, full `225 tests/0 failures`; GitHub Actions workflow 없음
+- 다음 정확한 작업: `PR-1B / TRUST-03`을 새 GitHub Issue로 등록하고, Issue 기준 branch에서만 pick/구현 시작
 
-그 외 구현 Task는 `Todo`이며, 이 문서 작성과 활성 작업 pick만 완료된 상태다.
+그 외 구현 Task는 `Todo`이며, 다음 Task의 Issue 생성과 pick은 아직 완료되지 않은 상태다.
 
 ## 3. 설계 원칙
 
@@ -123,8 +124,8 @@ git worktree prune --dry-run
 | SEC-01 | Todo | PR-0 | Dashboard read-only/control 분리 | `config/schema.ex`, `dashboard_live.ex` |
 | SEC-02 | Todo | PR-0 | Dashboard/API 인증 및 non-loopback fail-closed | `router.ex`, 새 auth plug, `symphony_ex.ex` |
 | SEC-03 | Todo | PR-0 | `check_origin`·배포 예시 강화 | `symphony_ex.ex`, `DEPLOY.md` |
-| TRUST-01 | Review | PR-1A | Issue author/association domain 필드 | `domain/issue.ex`, `github/adapter.ex` |
-| TRUST-02 | Review | PR-1A | Trusted association/actor gate | `automation.ex`, `config/schema.ex`, `orchestrator.ex` |
+| TRUST-01 | Done | PR-1A | Issue author/association domain 필드 | `domain/issue.ex`, `github/adapter.ex` |
+| TRUST-02 | Done | PR-1A | Trusted association/actor gate | `automation.ex`, `config/schema.ex`, `orchestrator.ex` |
 | TRUST-03 | Todo | PR-1B | Agent/orchestrator token 분리 | `config.ex`, `github/client.ex`, app-server, Docker env/entrypoint |
 | TRUST-04 | Todo | PR-1C | Non-root container·sandbox·health migration | `Dockerfile`, Compose, workflows |
 | CTRL-01 | Todo | PR-2 | Active-run restart guard | `runtime_control.ex`, `orchestrator.ex` |
