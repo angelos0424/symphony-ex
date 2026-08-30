@@ -25,6 +25,13 @@ orchestrator:
   backoff-base-ms: 10000
 automation:
   mode: full-auto
+  issue-trust:
+    require-trusted-author: true
+    allowed-associations:
+      - OWNER
+      - MEMBER
+      - COLLABORATOR
+    allowed-actors: []
   full-auto:
     apply-review-feedback: true
     auto-merge: true

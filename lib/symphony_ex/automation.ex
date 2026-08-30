@@ -23,6 +23,11 @@ defmodule SymphonyEx.Automation do
     services: [],
     service_aliases: %{},
     service_concurrency: %{},
+    issue_trust: [
+      require_trusted_author: false,
+      allowed_associations: ["OWNER", "MEMBER", "COLLABORATOR"],
+      allowed_actors: []
+    ],
     reviewbot: [
       actors: [],
       actors_set: MapSet.new()
@@ -71,6 +76,7 @@ defmodule SymphonyEx.Automation do
     |> Keyword.put(:services_set, MapSet.new(services))
     |> Keyword.put(:service_aliases, service_aliases)
     |> Keyword.put(:service_concurrency, service_concurrency)
+    |> Keyword.update(:issue_trust, @default[:issue_trust], &normalize_issue_trust/1)
     |> Keyword.update(:reviewbot, @default[:reviewbot], &normalize_reviewbot/1)
     |> Keyword.update(:full_auto, @default[:full_auto], &normalize_full_auto/1)
     |> Keyword.update(:night_worker, @default[:night_worker], &normalize_night_worker/1)
@@ -101,6 +107,42 @@ defmodule SymphonyEx.Automation do
     validate_reviewbot!(Keyword.get(config, :reviewbot, []))
     validate_night_worker!(Keyword.get(config, :night_worker, []))
     config
+  end
+
+  @doc "Returns whether an issue has an allowed GitHub author trust signal."
+  @spec issue_trust_result(Issue.t(), keyword()) ::
+          :ok | {:error, :missing_issue_author_trust | :untrusted_issue_author}
+  def issue_trust_result(%Issue{} = issue, config) when is_list(config) do
+    trust = Keyword.get(config, :issue_trust, @default[:issue_trust])
+
+    if Keyword.get(trust, :require_trusted_author, false) do
+      required_issue_trust_result(issue, trust)
+    else
+      :ok
+    end
+  end
+
+  @spec required_issue_trust_result(Issue.t(), keyword()) ::
+          :ok | {:error, :missing_issue_author_trust | :untrusted_issue_author}
+  defp required_issue_trust_result(%Issue{} = issue, trust) do
+    author_login = normalize_actor_login(issue.author_login || "")
+    author_association = normalize_association(issue.author_association)
+    allowed_actors = MapSet.new(Keyword.get(trust, :allowed_actors, []))
+    allowed_associations = MapSet.new(Keyword.get(trust, :allowed_associations, []))
+
+    cond do
+      author_login != "" and MapSet.member?(allowed_actors, author_login) ->
+        :ok
+
+      author_association != "" and MapSet.member?(allowed_associations, author_association) ->
+        :ok
+
+      author_login == "" and author_association == "" ->
+        {:error, :missing_issue_author_trust}
+
+      true ->
+        {:error, :untrusted_issue_author}
+    end
   end
 
   @doc "Resolves the active runtime automation mode."
@@ -223,6 +265,39 @@ defmodule SymphonyEx.Automation do
 
   defp normalize_service_name(service),
     do: service |> to_string() |> String.trim() |> String.downcase()
+
+  defp normalize_issue_trust(opts) when is_list(opts) do
+    opts = Keyword.merge(@default[:issue_trust], opts)
+
+    opts
+    |> Keyword.put(
+      :allowed_associations,
+      normalize_associations(Keyword.get(opts, :allowed_associations, []))
+    )
+    |> Keyword.put(
+      :allowed_actors,
+      normalize_reviewbot_actors(Keyword.get(opts, :allowed_actors, []))
+    )
+  end
+
+  defp normalize_issue_trust(%{} = opts), do: opts |> Enum.into([]) |> normalize_issue_trust()
+  defp normalize_issue_trust(_opts), do: @default[:issue_trust]
+
+  defp normalize_associations(values) when is_list(values) do
+    values
+    |> Enum.map(&normalize_association/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.uniq()
+  end
+
+  defp normalize_associations(value), do: normalize_associations([value])
+
+  defp normalize_association(value) do
+    value
+    |> to_string()
+    |> String.trim()
+    |> String.upcase()
+  end
 
   defp normalize_reviewbot(opts) when is_list(opts) do
     opts =

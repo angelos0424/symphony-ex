@@ -253,6 +253,8 @@ defmodule SymphonyEx.GitHub.ClientTest do
            }
 
     assert request.options[:json]["query"] =~ "items(first: 100, query: $query)"
+    assert request.options[:json]["query"] =~ "authorAssociation"
+    assert request.options[:json]["query"] =~ "author {"
   end
 
   test "lists user-owned project items when organization lookup returns a benign partial error" do

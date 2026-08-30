@@ -403,6 +403,10 @@ defmodule SymphonyEx.GitHub.Client do
                   number
                   title
                   state
+                  authorAssociation
+                  author {
+                    login
+                  }
     #{issue_body_field}              url
                 }
               }
@@ -516,6 +520,10 @@ defmodule SymphonyEx.GitHub.Client do
                   number
                   title
                   state
+                  authorAssociation
+                  author {
+                    login
+                  }
     #{issue_body_field}              url
                 }
               }

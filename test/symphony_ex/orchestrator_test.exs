@@ -1622,6 +1622,35 @@ defmodule SymphonyEx.OrchestratorTest do
       assert snapshot.lifecycle == custom_lifecycle
       assert Keyword.get(snapshot.tracker_opts, :lifecycle) == custom_lifecycle
     end
+
+    test "blocks untrusted issues before creating a workspace or running the agent" do
+      issue =
+        issue_fixture("TRUST-1",
+          author_login: "external-contributor",
+          author_association: "CONTRIBUTOR"
+        )
+
+      start_supervised!({Control, test_pid: self(), candidate_batches: [[issue]]})
+
+      orchestrator =
+        start_orchestrator(
+          automation:
+            SymphonyEx.Automation.normalize(
+              issue_trust: [
+                require_trusted_author: true,
+                allowed_associations: ["OWNER", "MEMBER", "COLLABORATOR"],
+                allowed_actors: []
+              ]
+            )
+        )
+
+      Process.sleep(100)
+      snapshot = Orchestrator.snapshot(orchestrator)
+      assert snapshot.running == %{}
+      assert snapshot.retry_queue == %{}
+      assert Control.runs() == []
+      assert [%{payload: %{gating_reason: :untrusted_issue_author}}] = Control.updates()
+    end
   end
 
   defp start_orchestrator(extra_opts \\ []) do

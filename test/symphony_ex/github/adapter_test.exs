@@ -111,6 +111,40 @@ defmodule SymphonyEx.GitHub.AdapterTest do
     assert issue.url == "https://github.com/example/repo/issues/12"
   end
 
+  test "maps GitHub author trust metadata into issue struct" do
+    payload = %{
+      "id" => 101,
+      "number" => 13,
+      "title" => "Trusted issue",
+      "body" => "Service: api\nPaths: lib/api.ex",
+      "html_url" => "https://github.com/example/repo/issues/13",
+      "state" => "open",
+      "user" => %{"login" => "alice"},
+      "author_association" => "MEMBER"
+    }
+
+    assert %Issue{} = issue = Adapter.to_issue(payload)
+    assert issue.author_login == "alice"
+    assert issue.author_association == "MEMBER"
+  end
+
+  test "maps GraphQL-style author trust metadata into issue struct" do
+    payload = %{
+      "id" => "I_14",
+      "number" => 14,
+      "title" => "GraphQL issue",
+      "body" => "Service: api\nPaths: lib/api.ex",
+      "url" => "https://github.com/example/repo/issues/14",
+      "state" => "OPEN",
+      "author" => %{"login" => "trusted-bot"},
+      "authorAssociation" => "COLLABORATOR"
+    }
+
+    assert %Issue{} = issue = Adapter.to_issue(payload)
+    assert issue.author_login == "trusted-bot"
+    assert issue.author_association == "COLLABORATOR"
+  end
+
   test "uses tracker-required metadata fields when mapping GitHub issue payloads" do
     payload = %{
       "id" => 101,

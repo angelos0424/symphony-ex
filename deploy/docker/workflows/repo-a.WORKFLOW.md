@@ -30,6 +30,13 @@ orchestrator:
     infra: 1
 automation:
   mode: full-auto
+  issue-trust:
+    require-trusted-author: true
+    allowed-associations:
+      - OWNER
+      - MEMBER
+      - COLLABORATOR
+    allowed-actors: []
   services:
     - sns-manager
     - receipt-manager

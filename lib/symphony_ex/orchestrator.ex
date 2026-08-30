@@ -105,9 +105,11 @@ defmodule SymphonyEx.Orchestrator do
     :dependency_blocked,
     :human_blocked,
     :missing_required_metadata,
+    :missing_issue_author_trust,
     :missing_title,
     :serialized_conflict,
-    :unknown_service
+    :unknown_service,
+    :untrusted_issue_author
   ]
 
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -1148,13 +1150,23 @@ defmodule SymphonyEx.Orchestrator do
 
   @spec check_issue_not_blocked(state(), Issue.t()) :: :ok | {:skip, atom()}
   defp check_issue_not_blocked(state, issue) do
-    cond do
-      blocked_issue?(issue, state.blocked_labels) -> {:skip, :human_blocked}
-      dependency_blocked?(issue) -> {:skip, :dependency_blocked}
-      missing_required_metadata?(issue) -> {:skip, :missing_required_metadata}
-      unknown_service?(state, issue) -> {:skip, :unknown_service}
-      conflict_locked?(state, issue) -> {:skip, :serialized_conflict}
-      true -> :ok
+    with :ok <- check_issue_trust(issue, state.automation) do
+      cond do
+        blocked_issue?(issue, state.blocked_labels) -> {:skip, :human_blocked}
+        dependency_blocked?(issue) -> {:skip, :dependency_blocked}
+        missing_required_metadata?(issue) -> {:skip, :missing_required_metadata}
+        unknown_service?(state, issue) -> {:skip, :unknown_service}
+        conflict_locked?(state, issue) -> {:skip, :serialized_conflict}
+        true -> :ok
+      end
+    end
+  end
+
+  @spec check_issue_trust(Issue.t(), Automation.t()) :: :ok | {:skip, atom()}
+  defp check_issue_trust(%Issue{} = issue, automation) do
+    case Automation.issue_trust_result(issue, automation) do
+      :ok -> :ok
+      {:error, reason} -> {:skip, reason}
     end
   end
 
@@ -1550,6 +1562,11 @@ defmodule SymphonyEx.Orchestrator do
 
   defp maybe_put_gating_context(payload, %Issue{} = issue, :dependency_blocked) do
     Map.put(payload, :blocked_by_identifiers, issue.blocked_by_identifiers)
+  end
+
+  defp maybe_put_gating_context(payload, %Issue{} = issue, reason)
+       when reason in [:missing_issue_author_trust, :untrusted_issue_author] do
+    Map.put(payload, :author_association, issue.author_association || "missing")
   end
 
   defp maybe_put_gating_context(payload, _issue, _reason), do: payload

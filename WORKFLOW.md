@@ -9,6 +9,14 @@ tracker:
     - Done
   write-back:
     enabled: true
+automation:
+  issue-trust:
+    require-trusted-author: true
+    allowed-associations:
+      - OWNER
+      - MEMBER
+      - COLLABORATOR
+    allowed-actors: []
 workspace:
   source_repo_url: $SOURCE_REPO_URL
 orchestrator:
