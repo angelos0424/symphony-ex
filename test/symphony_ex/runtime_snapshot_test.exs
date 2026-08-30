@@ -138,6 +138,13 @@ defmodule SymphonyEx.RuntimeSnapshotTest do
           concurrency_class: :docs,
           conflict_keys: MapSet.new(["service:docs"])
         }
+      },
+      gated_issues: %{
+        "TRUST-1" => %{
+          issue: issue_fixture("TRUST-1"),
+          gating_reason: :untrusted_issue_author,
+          concurrency_class: :default
+        }
       }
     }
 
@@ -220,6 +227,11 @@ defmodule SymphonyEx.RuntimeSnapshotTest do
     assert is_binary(retry.due_at)
     assert is_integer(retry.due_in_ms)
     assert retry.log_excerpt.exists == false
+
+    assert [gated] = snapshot.gated
+    assert gated.issue.identifier == "TRUST-1"
+    assert gated.gating_reason == :untrusted_issue_author
+    assert gated.concurrency_class == :default
 
     assert [completed] = snapshot.completed
     assert completed.attempt == 2

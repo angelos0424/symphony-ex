@@ -1682,6 +1682,7 @@ defmodule SymphonyEx.OrchestratorTest do
       snapshot = Orchestrator.snapshot(orchestrator)
       assert snapshot.running == %{}
       assert snapshot.retry_queue == %{}
+      assert snapshot.gated_issues["TRUST-1"].gating_reason == :untrusted_issue_author
       assert Control.runs() == []
       assert [%{payload: %{gating_reason: :untrusted_issue_author}}] = Control.updates()
     end

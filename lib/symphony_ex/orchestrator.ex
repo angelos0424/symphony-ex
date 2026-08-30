@@ -62,6 +62,12 @@ defmodule SymphonyEx.Orchestrator do
           conflict_keys: MapSet.t(conflict_key())
         }
 
+  @type gated_entry :: %{
+          issue: Issue.t(),
+          gating_reason: atom(),
+          concurrency_class: concurrency_class()
+        }
+
   @type state :: %{
           tracker: module(),
           tracker_opts: keyword(),
@@ -87,6 +93,7 @@ defmodule SymphonyEx.Orchestrator do
           default_conflict_scope_to_class: boolean(),
           running: %{String.t() => running_entry()},
           retry_queue: %{String.t() => retry_entry()},
+          gated_issues: %{String.t() => gated_entry()},
           retries: %{String.t() => non_neg_integer()},
           last_persisted_payloads: %{String.t() => map()},
           deferral_counts: %{String.t() => non_neg_integer()},
@@ -169,6 +176,7 @@ defmodule SymphonyEx.Orchestrator do
       default_conflict_scope_to_class: Keyword.get(opts, :default_conflict_scope_to_class, true),
       running: %{},
       retry_queue: %{},
+      gated_issues: %{},
       retries: %{},
       last_persisted_payloads: %{},
       deferral_counts: %{},
@@ -508,6 +516,7 @@ defmodule SymphonyEx.Orchestrator do
     else
       case dispatch_eligibility(state, issue) do
         :ok ->
+          state = clear_gated_issue(state, issue.identifier)
           automation_status = Automation.mode_status(state.automation)
 
           Logger.debug(
@@ -1512,10 +1521,26 @@ defmodule SymphonyEx.Orchestrator do
     log_gated_issue(state, issue, reason, klass)
 
     if reason in @github_visible_gating_reasons do
-      persist_gated_issue(state, issue, reason, klass)
+      state
+      |> remember_gated_issue(issue, reason, klass)
+      |> persist_gated_issue(issue, reason, klass)
     else
       state
     end
+  end
+
+  @spec remember_gated_issue(state(), Issue.t(), atom(), concurrency_class()) :: state()
+  defp remember_gated_issue(state, issue, reason, klass) do
+    put_in(state, [:gated_issues, issue.identifier], %{
+      issue: issue,
+      gating_reason: reason,
+      concurrency_class: klass
+    })
+  end
+
+  @spec clear_gated_issue(state(), String.t()) :: state()
+  defp clear_gated_issue(state, identifier) do
+    update_in(state, [:gated_issues], &Map.delete(&1, identifier))
   end
 
   @spec persist_gated_issue(state(), Issue.t(), atom(), concurrency_class()) :: state()

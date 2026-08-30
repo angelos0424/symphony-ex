@@ -123,6 +123,13 @@ defmodule SymphonyExWeb.ApiControllerTest do
           concurrency_class: :default,
           conflict_keys: MapSet.new(["service:docs"])
         }
+      },
+      gated_issues: %{
+        "TRUST-API" => %{
+          issue: issue_fixture("TRUST-API"),
+          gating_reason: :untrusted_issue_author,
+          concurrency_class: :default
+        }
       }
     }
 
@@ -153,6 +160,8 @@ defmodule SymphonyExWeb.ApiControllerTest do
     assert body["summary"]["completed_count"] == 1
     assert body["summary"]["write_back_alert_count"] == 1
     assert body["settings"]["max_concurrent"] == 2
+    assert body["gated"] |> hd() |> get_in(["issue", "identifier"]) == "TRUST-API"
+    assert body["gated"] |> hd() |> get_in(["gating_reason"]) == "untrusted_issue_author"
     assert body["write_back_stages"]["alert_count"] == 1
     assert body["running_count"] == 1
   end
@@ -166,6 +175,7 @@ defmodule SymphonyExWeb.ApiControllerTest do
     body = Jason.decode!(conn.resp_body)
     assert Enum.map(body["running"], & &1["issue"]["identifier"]) == ["SYM-1"]
     assert Enum.map(body["retry_queue"], & &1["issue"]["identifier"]) == ["SYM-2"]
+    assert Enum.map(body["gated"], & &1["issue"]["identifier"]) == ["TRUST-API"]
     assert Enum.map(body["completed"], & &1["issue"]["identifier"]) == ["SYM-0"]
     assert body["running"] |> hd() |> Map.has_key?("elapsed_ms")
     assert body["retry_queue"] |> hd() |> get_in(["last_result", "status"]) == "failed"
