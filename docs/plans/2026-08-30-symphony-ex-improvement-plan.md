@@ -81,7 +81,7 @@ git worktree prune --dry-run
 - Issue: [#32](https://github.com/angelos0424/symphony-ex/issues/32)
 - 구현: 로컬 구현 및 테스트 완료
 - PR: [#33](https://github.com/angelos0424/symphony-ex/pull/33)
-- 검증 head: `b9010866a586f02f591cda9d232ca00dafb65d33`
+- 검증 head: `fce1994`
 - 다음 정확한 작업: 위 PR head에서 spec-compliance review와 code-quality/security review 수행 후 merge 판단
 
 그 외 구현 Task는 `Todo`이며, 이 문서 작성과 활성 작업 pick만 완료된 상태다.
