@@ -87,6 +87,13 @@ git worktree prune --dry-run
 
 그 외 구현 Task는 `Todo`이며, 다음 Task의 Issue 생성과 pick은 아직 완료되지 않은 상태다.
 
+현재 후속 활성 작업:
+
+- `PR-1A-FU / TRUST-01·02` — **Picked Up**
+- Issue: [#34](https://github.com/angelos0424/symphony-ex/issues/34)
+- Parent PR: [#33](https://github.com/angelos0424/symphony-ex/pull/33)
+- 다음 정확한 작업: Issue #34 기준 branch에서 gated write-back과 dashboard queue filter를 구현하고 검증
+
 ## 3. 설계 원칙
 
 1. **Fail closed:** 신뢰되지 않은 issue, 인증 없는 remote control, 불완전한 write-back은 실행/완료로 처리하지 않는다.
@@ -126,6 +133,8 @@ git worktree prune --dry-run
 | SEC-03 | Todo | PR-0 | `check_origin`·배포 예시 강화 | `symphony_ex.ex`, `DEPLOY.md` |
 | TRUST-01 | Done | PR-1A | Issue author/association domain 필드 | `domain/issue.ex`, `github/adapter.ex` |
 | TRUST-02 | Done | PR-1A | Trusted association/actor gate | `automation.ex`, `config/schema.ex`, `orchestrator.ex` |
+| TRUST-01-FU | Picked Up | PR-1A-FU | lifecycle-comments 비활성 시 gated record write-back | `github/adapter.ex`, adapter tests |
+| TRUST-02-FU | Picked Up | PR-1A-FU | `Gated only` dashboard queue filter | `dashboard_live.ex`, dashboard tests |
 | TRUST-03 | Todo | PR-1B | Agent/orchestrator token 분리 | `config.ex`, `github/client.ex`, app-server, Docker env/entrypoint |
 | TRUST-04 | Todo | PR-1C | Non-root container·sandbox·health migration | `Dockerfile`, Compose, workflows |
 | CTRL-01 | Todo | PR-2 | Active-run restart guard | `runtime_control.ex`, `orchestrator.ex` |
