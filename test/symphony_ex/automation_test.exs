@@ -174,6 +174,12 @@ defmodule SymphonyEx.AutomationTest do
            ) ==
              {:error, :untrusted_issue_author}
 
+    assert Automation.issue_trust_result(
+             issue_fixture("None", author_association: "NONE"),
+             config
+           ) ==
+             {:error, :untrusted_issue_author}
+
     assert Automation.issue_trust_result(issue_fixture("Missing"), config) ==
              {:error, :missing_issue_author_trust}
   end
