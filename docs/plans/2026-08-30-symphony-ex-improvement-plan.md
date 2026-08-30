@@ -87,6 +87,15 @@ git worktree prune --dry-run
 
 그 외 구현 Task는 `Todo`이며, 다음 Task의 Issue 생성과 pick은 아직 완료되지 않은 상태다.
 
+현재 후속 활성 작업:
+
+- `PR-1A-FU / TRUST-01·02` — **Review**
+- Issue: [#34](https://github.com/angelos0424/symphony-ex/issues/34)
+- Parent PR: [#33](https://github.com/angelos0424/symphony-ex/pull/33)
+- PR: [#35](https://github.com/angelos0424/symphony-ex/pull/35)
+- 검증 head: `1246303e9ad2169e709b188a30371b81f96db44a`
+- 다음 정확한 작업: 위 PR head에서 spec-compliance review와 code-quality/security review 수행 후 merge 판단
+
 ## 3. 설계 원칙
 
 1. **Fail closed:** 신뢰되지 않은 issue, 인증 없는 remote control, 불완전한 write-back은 실행/완료로 처리하지 않는다.
@@ -126,6 +135,8 @@ git worktree prune --dry-run
 | SEC-03 | Todo | PR-0 | `check_origin`·배포 예시 강화 | `symphony_ex.ex`, `DEPLOY.md` |
 | TRUST-01 | Done | PR-1A | Issue author/association domain 필드 | `domain/issue.ex`, `github/adapter.ex` |
 | TRUST-02 | Done | PR-1A | Trusted association/actor gate | `automation.ex`, `config/schema.ex`, `orchestrator.ex` |
+| TRUST-01-FU | Review | PR-1A-FU | lifecycle-comments 비활성 시 gated record write-back | `github/adapter.ex`, adapter tests |
+| TRUST-02-FU | Review | PR-1A-FU | `Gated only` dashboard queue filter | `dashboard_live.ex`, dashboard tests |
 | TRUST-03 | Todo | PR-1B | Agent/orchestrator token 분리 | `config.ex`, `github/client.ex`, app-server, Docker env/entrypoint |
 | TRUST-04 | Todo | PR-1C | Non-root container·sandbox·health migration | `Dockerfile`, Compose, workflows |
 | CTRL-01 | Todo | PR-2 | Active-run restart guard | `runtime_control.ex`, `orchestrator.ex` |
@@ -263,6 +274,36 @@ mix format --check-formatted
 **Acceptance:** 비신뢰/metadata 누락 Issue와 명시 실행 우회가 모두 agent 시작 전에 차단되고, 허용 actor/association만 기존 경로로 실행된다.
 
 **Compatibility/Rollback:** 외부 contributor Issue 자동 실행은 차단된다. 보안 기능이므로 “설정 누락 시 허용” fallback은 두지 않고, 배포 전 dry-run으로 차단 대상을 보여준다.
+
+---
+
+### PR-1A-FU: Review findings — gated write-back과 dashboard filter
+
+**Objective:** PR-1A review에서 발견된 두 concrete gap을 닫는다. `lifecycle-comments: false`인 배포에서도 gated Issue의 안전한 차단 사유를 GitHub에 남기고, dashboard의 `Gated only` URL filter를 실제 동작시킨다.
+
+**Issue:** [#34](https://github.com/angelos0424/symphony-ex/issues/34)
+
+**Files:**
+- Modify: `lib/symphony_ex/github/adapter.ex`
+- Modify: `lib/symphony_ex_web/live/dashboard_live.ex`
+- Test: `test/symphony_ex/github/adapter_test.exs`
+- Test: `test/symphony_ex_web/dashboard_live_test.exs`
+
+**Steps:**
+
+1. `status: :gated`만 normal `lifecycle-comments` 설정과 독립된 managed comment path로 기록한다.
+2. 기존 claimed/running/retry/released의 `lifecycle-comments: false` 동작은 유지한다.
+3. gated record에는 reason과 operator context만 포함하고 token/raw author login은 포함하지 않는다.
+4. RuntimeSnapshot의 gated entry를 dashboard `Gated only` queue로 연결한다.
+5. `normalize_queue/1`에서 `"gated"`를 허용하고 URL regression test를 추가한다.
+
+**Acceptance:**
+- gated write-back이 lifecycle comments disabled template에서도 visible하다.
+- normal lifecycle comments disabled behavior가 회귀하지 않는다.
+- `/?queue=gated`가 gated section만 렌더링한다.
+- focused/full test와 정적 분석 baseline 확인이 완료된다.
+
+**Compatibility/Rollback:** gated write-back은 운영자가 차단 이유를 확인할 수 있도록 의도적으로 항상 기록한다. 문제 발생 시 PR-1A-FU commit만 revert하며 PR-1A trust gate 자체는 유지한다.
 
 ---
 

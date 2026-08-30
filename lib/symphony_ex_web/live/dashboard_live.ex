@@ -1047,8 +1047,9 @@ defmodule SymphonyExWeb.DashboardLive do
     }
   end
 
-  defp normalize_queue(queue) when queue in ["all", "running", "retry_queue", "completed"],
-    do: queue
+  defp normalize_queue(queue)
+       when queue in ["all", "gated", "running", "retry_queue", "completed"],
+       do: queue
 
   defp normalize_queue(_queue), do: "all"
 

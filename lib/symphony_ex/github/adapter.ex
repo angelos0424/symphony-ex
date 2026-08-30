@@ -126,6 +126,11 @@ defmodule SymphonyEx.GitHub.Adapter do
 
   @spec maybe_create_lifecycle_comment(Issue.t(), map(), keyword()) ::
           {:ok, map()} | {:error, term()}
+  defp maybe_create_lifecycle_comment(%Issue{} = issue, %{status: :gated} = attrs, opts) do
+    body = render_run_record(issue, attrs)
+    create_comment(issue.identifier, managed_block(body), opts)
+  end
+
   defp maybe_create_lifecycle_comment(%Issue{} = issue, attrs, opts) do
     write_back_opts = Keyword.get(opts, :write_back, [])
 

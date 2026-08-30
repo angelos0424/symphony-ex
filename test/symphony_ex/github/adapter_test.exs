@@ -1104,6 +1104,52 @@ defmodule SymphonyEx.GitHub.AdapterTest do
              Adapter.write_run_record(issue, %{status: :running, attempt: 1}, opts)
   end
 
+  test "write_run_record always records gated issues when lifecycle comments are disabled" do
+    issue = %Issue{
+      id: "I_kwDOA1",
+      identifier: "12",
+      title: "Untrusted title",
+      description: "Original",
+      state: "Open"
+    }
+
+    request_fun = fn request ->
+      assert request.method == :post
+      assert String.ends_with?(to_string(request.url), "/repos/example/repo/issues/12/comments")
+
+      body = request.options[:json][:body]
+      assert body =~ "<!-- symphony:managed -->"
+      assert body =~ "status: gated"
+      assert body =~ "gating_reason: untrusted_issue_author"
+      assert body =~ "author_association: CONTRIBUTOR"
+      refute body =~ "author_login"
+
+      {:ok, %Req.Response{status: 200, body: Map.new(request.options[:json])}}
+    end
+
+    opts = [
+      api_key: "gh-token",
+      owner: "example",
+      repo: "repo",
+      write_back: [lifecycle_comments: false, lifecycle_reactions: true],
+      request_fun: request_fun
+    ]
+
+    assert {:ok, %{body: body}} =
+             Adapter.write_run_record(
+               issue,
+               %{
+                 status: :gated,
+                 attempt: 0,
+                 gating_reason: :untrusted_issue_author,
+                 author_association: "CONTRIBUTOR"
+               },
+               opts
+             )
+
+    assert body =~ "status: gated"
+  end
+
   test "write_run_record maps released lifecycle reactions to +1 and -1" do
     issue = %Issue{
       id: "I_kwDOA1",
