@@ -275,6 +275,36 @@ mix format --check-formatted
 
 ---
 
+### PR-1A-FU: Review findings — gated write-back과 dashboard filter
+
+**Objective:** PR-1A review에서 발견된 두 concrete gap을 닫는다. `lifecycle-comments: false`인 배포에서도 gated Issue의 안전한 차단 사유를 GitHub에 남기고, dashboard의 `Gated only` URL filter를 실제 동작시킨다.
+
+**Issue:** [#34](https://github.com/angelos0424/symphony-ex/issues/34)
+
+**Files:**
+- Modify: `lib/symphony_ex/github/adapter.ex`
+- Modify: `lib/symphony_ex_web/live/dashboard_live.ex`
+- Test: `test/symphony_ex/github/adapter_test.exs`
+- Test: `test/symphony_ex_web/dashboard_live_test.exs`
+
+**Steps:**
+
+1. `status: :gated`만 normal `lifecycle-comments` 설정과 독립된 managed comment path로 기록한다.
+2. 기존 claimed/running/retry/released의 `lifecycle-comments: false` 동작은 유지한다.
+3. gated record에는 reason과 operator context만 포함하고 token/raw author login은 포함하지 않는다.
+4. RuntimeSnapshot의 gated entry를 dashboard `Gated only` queue로 연결한다.
+5. `normalize_queue/1`에서 `"gated"`를 허용하고 URL regression test를 추가한다.
+
+**Acceptance:**
+- gated write-back이 lifecycle comments disabled template에서도 visible하다.
+- normal lifecycle comments disabled behavior가 회귀하지 않는다.
+- `/?queue=gated`가 gated section만 렌더링한다.
+- focused/full test와 정적 분석 baseline 확인이 완료된다.
+
+**Compatibility/Rollback:** gated write-back은 운영자가 차단 이유를 확인할 수 있도록 의도적으로 항상 기록한다. 문제 발생 시 PR-1A-FU commit만 revert하며 PR-1A trust gate 자체는 유지한다.
+
+---
+
 ### PR-1B: Agent와 orchestrator 자격증명 분리
 
 **Objective:** Codex subprocess가 tracker/project write-back token과 dashboard/Phoenix secret에 접근하지 못하게 한다.

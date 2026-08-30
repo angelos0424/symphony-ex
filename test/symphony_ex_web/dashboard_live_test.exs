@@ -273,6 +273,18 @@ defmodule SymphonyExWeb.DashboardLiveTest do
     assert html =~ "Clear filters"
   end
 
+  test "supports the gated queue filter via query params", %{conn: conn} do
+    {:ok, _view, html} = live(conn, "/?queue=gated")
+
+    assert html =~ ">Gated issues<"
+    assert html =~ "TRUST-DASH"
+    assert html =~ "untrusted_issue_author"
+    refute html =~ ">Running issues<"
+    refute html =~ ">Retry queue<"
+    refute html =~ ">Recent completions<"
+    assert html =~ "queue: gated"
+  end
+
   test "filters completed history by window and honors row limit params", %{conn: conn} do
     {:ok, _view, html} = live(conn, "/?queue=completed&completed_window=7d&completed_limit=100")
 
