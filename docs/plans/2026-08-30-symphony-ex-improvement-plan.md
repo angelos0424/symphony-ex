@@ -226,7 +226,9 @@ mix test
 - Modify: `lib/symphony_ex/automation.ex`
 - Modify: `lib/symphony_ex/config/schema.ex`, `lib/symphony_ex/config.ex`
 - Modify: `lib/symphony_ex/orchestrator.ex`
+- Modify: `lib/symphony_ex/runtime_snapshot.ex`, `lib/symphony_ex_web/controllers/api_controller.ex`, `lib/symphony_ex_web/live/dashboard_live.ex`
 - Test: `config_test.exs`, `github/client_test.exs`, `github/adapter_test.exs`, `github_issue_flow_test.exs`, `orchestrator_test.exs`
+- Test: `runtime_snapshot_test.exs`, `web/api_controller_test.exs`, `web/dashboard_live_test.exs`
 - Create: `docs/security-model.md`
 
 **Configuration contract:**
