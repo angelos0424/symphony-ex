@@ -1540,7 +1540,7 @@ defmodule SymphonyEx.Orchestrator do
 
   @spec clear_gated_issue(state(), String.t()) :: state()
   defp clear_gated_issue(state, identifier) do
-    update_in(state, [:gated_issues], &Map.delete(&1, identifier))
+    Map.update(state, :gated_issues, %{}, &Map.delete(&1, identifier))
   end
 
   @spec persist_gated_issue(state(), Issue.t(), atom(), concurrency_class()) :: state()
