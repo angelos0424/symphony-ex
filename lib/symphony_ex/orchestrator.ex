@@ -62,6 +62,12 @@ defmodule SymphonyEx.Orchestrator do
           conflict_keys: MapSet.t(conflict_key())
         }
 
+  @type gated_entry :: %{
+          issue: Issue.t(),
+          gating_reason: atom(),
+          concurrency_class: concurrency_class()
+        }
+
   @type state :: %{
           tracker: module(),
           tracker_opts: keyword(),
@@ -87,6 +93,7 @@ defmodule SymphonyEx.Orchestrator do
           default_conflict_scope_to_class: boolean(),
           running: %{String.t() => running_entry()},
           retry_queue: %{String.t() => retry_entry()},
+          gated_issues: %{String.t() => gated_entry()},
           retries: %{String.t() => non_neg_integer()},
           last_persisted_payloads: %{String.t() => map()},
           deferral_counts: %{String.t() => non_neg_integer()},
@@ -105,9 +112,11 @@ defmodule SymphonyEx.Orchestrator do
     :dependency_blocked,
     :human_blocked,
     :missing_required_metadata,
+    :missing_issue_author_trust,
     :missing_title,
     :serialized_conflict,
-    :unknown_service
+    :unknown_service,
+    :untrusted_issue_author
   ]
 
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -167,6 +176,7 @@ defmodule SymphonyEx.Orchestrator do
       default_conflict_scope_to_class: Keyword.get(opts, :default_conflict_scope_to_class, true),
       running: %{},
       retry_queue: %{},
+      gated_issues: %{},
       retries: %{},
       last_persisted_payloads: %{},
       deferral_counts: %{},
@@ -506,6 +516,7 @@ defmodule SymphonyEx.Orchestrator do
     else
       case dispatch_eligibility(state, issue) do
         :ok ->
+          state = clear_gated_issue(state, issue.identifier)
           automation_status = Automation.mode_status(state.automation)
 
           Logger.debug(
@@ -1148,13 +1159,23 @@ defmodule SymphonyEx.Orchestrator do
 
   @spec check_issue_not_blocked(state(), Issue.t()) :: :ok | {:skip, atom()}
   defp check_issue_not_blocked(state, issue) do
-    cond do
-      blocked_issue?(issue, state.blocked_labels) -> {:skip, :human_blocked}
-      dependency_blocked?(issue) -> {:skip, :dependency_blocked}
-      missing_required_metadata?(issue) -> {:skip, :missing_required_metadata}
-      unknown_service?(state, issue) -> {:skip, :unknown_service}
-      conflict_locked?(state, issue) -> {:skip, :serialized_conflict}
-      true -> :ok
+    with :ok <- check_issue_trust(issue, state.automation) do
+      cond do
+        blocked_issue?(issue, state.blocked_labels) -> {:skip, :human_blocked}
+        dependency_blocked?(issue) -> {:skip, :dependency_blocked}
+        missing_required_metadata?(issue) -> {:skip, :missing_required_metadata}
+        unknown_service?(state, issue) -> {:skip, :unknown_service}
+        conflict_locked?(state, issue) -> {:skip, :serialized_conflict}
+        true -> :ok
+      end
+    end
+  end
+
+  @spec check_issue_trust(Issue.t(), Automation.t()) :: :ok | {:skip, atom()}
+  defp check_issue_trust(%Issue{} = issue, automation) do
+    case Automation.issue_trust_result(issue, automation) do
+      :ok -> :ok
+      {:error, reason} -> {:skip, reason}
     end
   end
 
@@ -1500,10 +1521,26 @@ defmodule SymphonyEx.Orchestrator do
     log_gated_issue(state, issue, reason, klass)
 
     if reason in @github_visible_gating_reasons do
-      persist_gated_issue(state, issue, reason, klass)
+      state
+      |> remember_gated_issue(issue, reason, klass)
+      |> persist_gated_issue(issue, reason, klass)
     else
       state
     end
+  end
+
+  @spec remember_gated_issue(state(), Issue.t(), atom(), concurrency_class()) :: state()
+  defp remember_gated_issue(state, issue, reason, klass) do
+    put_in(state, [:gated_issues, issue.identifier], %{
+      issue: issue,
+      gating_reason: reason,
+      concurrency_class: klass
+    })
+  end
+
+  @spec clear_gated_issue(state(), String.t()) :: state()
+  defp clear_gated_issue(state, identifier) do
+    Map.update(state, :gated_issues, %{}, &Map.delete(&1, identifier))
   end
 
   @spec persist_gated_issue(state(), Issue.t(), atom(), concurrency_class()) :: state()
@@ -1550,6 +1587,11 @@ defmodule SymphonyEx.Orchestrator do
 
   defp maybe_put_gating_context(payload, %Issue{} = issue, :dependency_blocked) do
     Map.put(payload, :blocked_by_identifiers, issue.blocked_by_identifiers)
+  end
+
+  defp maybe_put_gating_context(payload, %Issue{} = issue, reason)
+       when reason in [:missing_issue_author_trust, :untrusted_issue_author] do
+    Map.put(payload, :author_association, issue.author_association || "missing")
   end
 
   defp maybe_put_gating_context(payload, _issue, _reason), do: payload

@@ -66,6 +66,7 @@ defmodule SymphonyEx.RuntimeSnapshot do
           summary: map(),
           running: [map()],
           retry_queue: [map()],
+          gated: [map()],
           completed: [completed_entry()],
           completed_issue_identifiers: [String.t()],
           settings: map(),
@@ -90,6 +91,7 @@ defmodule SymphonyEx.RuntimeSnapshot do
     observability = Observability.snapshot()
     running = running_entries(state)
     retry_queue = retry_entries(state)
+    gated = gated_entries(state)
     completed = completed_entries(state)
 
     %{
@@ -104,6 +106,7 @@ defmodule SymphonyEx.RuntimeSnapshot do
         ),
       running: running,
       retry_queue: retry_queue,
+      gated: gated,
       completed: completed,
       completed_issue_identifiers:
         completed |> Enum.map(& &1.issue.identifier) |> Enum.uniq() |> Enum.sort(),
@@ -131,8 +134,9 @@ defmodule SymphonyEx.RuntimeSnapshot do
   @spec observer_fingerprint(map()) :: observer_fingerprint()
   def observer_fingerprint(state) do
     :erlang.phash2(
-      {:runtime_snapshot_v1, observer_running(state), observer_retry_queue(state),
-       observer_completed(state), observer_settings(state), Observability.snapshot()}
+      {:runtime_snapshot_v2, observer_running(state), observer_retry_queue(state),
+       observer_gated(state), observer_completed(state), observer_settings(state),
+       Observability.snapshot()}
     )
   end
 
@@ -234,6 +238,20 @@ defmodule SymphonyEx.RuntimeSnapshot do
       }
     end)
     |> Enum.sort_by(fn entry -> {entry.due_at_ms, entry.concurrency_class, entry.identifier} end)
+  end
+
+  defp observer_gated(state) do
+    state
+    |> Map.get(:gated_issues, %{})
+    |> Map.values()
+    |> Enum.map(fn entry ->
+      %{
+        identifier: entry.issue.identifier,
+        gating_reason: entry.gating_reason,
+        concurrency_class: entry.concurrency_class
+      }
+    end)
+    |> Enum.sort_by(fn entry -> {entry.identifier, entry.gating_reason} end)
   end
 
   defp observer_completed(state) do
@@ -347,6 +365,21 @@ defmodule SymphonyEx.RuntimeSnapshot do
         last_result: result_payload(entry.last_result),
         log_excerpt: log_excerpt(entry[:workspace_path]),
         workspace_path: entry[:workspace_path]
+      }
+    end)
+  end
+
+  @spec gated_entries(map()) :: [map()]
+  def gated_entries(state) do
+    state
+    |> Map.get(:gated_issues, %{})
+    |> Map.values()
+    |> Enum.sort_by(fn entry -> {entry.concurrency_class, entry.issue.identifier} end)
+    |> Enum.map(fn entry ->
+      %{
+        issue: issue_payload(entry.issue),
+        gating_reason: entry.gating_reason,
+        concurrency_class: entry.concurrency_class
       }
     end)
   end
@@ -624,6 +657,7 @@ defmodule SymphonyEx.RuntimeSnapshot do
       },
       running: [],
       retry_queue: [],
+      gated: [],
       completed: [],
       completed_issue_identifiers: [],
       settings: %{

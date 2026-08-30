@@ -26,6 +26,7 @@ defmodule SymphonyExWeb.DashboardLive do
 
   @queue_options [
     {"All queues", "all"},
+    {"Gated only", "gated"},
     {"Running only", "running"},
     {"Retry only", "retry_queue"},
     {"Completed only", "completed"}
@@ -368,7 +369,7 @@ defmodule SymphonyExWeb.DashboardLive do
 
         <div style="display: grid; gap: 8px; margin-top: 12px;">
           <div style={muted_text_style()}>
-            Showing {view_total_count(@view)} matched issue(s) across running, retry, and completed sections.
+            Showing {view_total_count(@view)} matched issue(s) across gated, running, retry, and completed sections.
           </div>
 
           <%= if active_filter_chips(@filters) != [] do %>
@@ -425,6 +426,45 @@ defmodule SymphonyExWeb.DashboardLive do
       <% else %>
         <div class="dashboard-content-grid">
           <div style="display: grid; gap: 16px;">
+            <%= if queue_visible?(@filters, "gated") do %>
+              <section style={panel_style()}>
+                <div style="display: flex; justify-content: space-between; gap: 12px; align-items: baseline; flex-wrap: wrap; margin-bottom: 12px;">
+                  <h2 style="margin: 0; font-size: 20px;">Gated issues</h2>
+                  <span style="color: #92400e; font-size: 13px;">{length(@view.gated)} matching issue(s)</span>
+                </div>
+                <%= if @view.gated == [] do %>
+                  <p style="color: #6b7280; margin-bottom: 0;">{empty_message(@filters, "gated", "No gated issues recorded in the current runtime yet.")}</p>
+                <% else %>
+                  <div style="display: grid; gap: 12px;">
+                    <%= for entry <- @view.gated do %>
+                      <article style={entry_card_style(entry, @selected_identifier, "border: 1px solid #fca5a5; background: #fff7f7;")}>
+                        <div style="display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap;">
+                          <div>
+                            <div style="font-size: 12px; color: #991b1b; text-transform: uppercase;">{entry.issue.identifier}</div>
+                            <div style="font-size: 18px; font-weight: 600;">{entry.issue.title}</div>
+                          </div>
+                          <div style="display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; align-items: center;">
+                            <span style={pill_style(:retry)}>{entry.gating_reason}</span>
+                            <span style={pill_style(:neutral)}>{entry.concurrency_class}</span>
+                          </div>
+                        </div>
+                        <dl style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px 12px; margin: 12px 0 0;">
+                          <div>
+                            <dt style={dt_style()}>Issue state</dt>
+                            <dd style={dd_style()}>{entry.issue.state}</dd>
+                          </div>
+                          <div>
+                            <dt style={dt_style()}>Dispatch status</dt>
+                            <dd style={dd_style()}>Blocked before workspace and Codex execution</dd>
+                          </div>
+                        </dl>
+                      </article>
+                    <% end %>
+                  </div>
+                <% end %>
+              </section>
+            <% end %>
+
             <%= if queue_visible?(@filters, "running") do %>
               <section style={panel_style()}>
                 <div style="display: flex; justify-content: space-between; gap: 12px; align-items: baseline; flex-wrap: wrap; margin-bottom: 12px;">
@@ -961,6 +1001,7 @@ defmodule SymphonyExWeb.DashboardLive do
           snapshot.running
           |> filter_entries(filters, :running)
           |> sort_active_entries(filters, :running),
+        gated: snapshot |> Map.get(:gated, []) |> filter_entries(filters, :gated),
         retry_queue:
           snapshot.retry_queue
           |> filter_entries(filters, :retry_queue)
@@ -1161,6 +1202,7 @@ defmodule SymphonyExWeb.DashboardLive do
 
   defp matches_status_filter?(_entry, "all", _queue), do: true
   defp matches_status_filter?(_entry, _status, :running), do: true
+  defp matches_status_filter?(_entry, _status, :gated), do: true
 
   defp matches_status_filter?(entry, status, :retry_queue),
     do: to_string(get_in(entry, [:last_result, :status])) == status
@@ -1170,6 +1212,13 @@ defmodule SymphonyExWeb.DashboardLive do
 
   defp matches_error_category_filter?(_entry, "", _queue), do: true
   defp matches_error_category_filter?(_entry, _category, :running), do: true
+
+  defp matches_error_category_filter?(entry, category, :gated),
+    do:
+      String.contains?(
+        String.downcase(to_string(entry.gating_reason)),
+        String.downcase(category)
+      )
 
   defp matches_error_category_filter?(entry, category, :retry_queue),
     do:
@@ -1277,7 +1326,9 @@ defmodule SymphonyExWeb.DashboardLive do
   defp completed_limit(filters), do: String.to_integer(filters["completed_limit"] || "10")
 
   defp view_total_count(view),
-    do: length(view.running) + length(view.retry_queue) + length(view.completed)
+    do:
+      length(view.gated) + length(view.running) + length(view.retry_queue) +
+        length(view.completed)
 
   defp active_filter_chips(filters) do
     [

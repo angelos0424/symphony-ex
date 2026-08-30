@@ -1041,6 +1041,40 @@ defmodule SymphonyEx.OrchestratorTest do
     assert Enum.map(payloads, & &1.status) == [:claimed, :running, :released]
   end
 
+  test "blocks an untrusted explicit issue before workspace or agent execution" do
+    issue =
+      issue_fixture("TRUST-EXPLICIT",
+        author_login: "external-contributor",
+        author_association: "NONE"
+      )
+
+    start_supervised!(
+      {Control,
+       test_pid: self(), candidate_batches: [[]], issue_lookup: %{"TRUST-EXPLICIT" => issue}}
+    )
+
+    orchestrator =
+      start_orchestrator(
+        issue_identifier: "TRUST-EXPLICIT",
+        automation:
+          SymphonyEx.Automation.normalize(
+            issue_trust: [
+              require_trusted_author: true,
+              allowed_associations: ["OWNER", "MEMBER", "COLLABORATOR"],
+              allowed_actors: []
+            ]
+          )
+      )
+
+    Process.sleep(100)
+    snapshot = Orchestrator.snapshot(orchestrator)
+
+    assert snapshot.running == %{}
+    assert snapshot.retry_queue == %{}
+    assert Control.runs() == []
+    assert [%{payload: %{gating_reason: :untrusted_issue_author}} | _] = Control.updates()
+  end
+
   test "runs workspace recovery preflight before agent execution" do
     issue = issue_fixture("PRE-1")
 
@@ -1621,6 +1655,36 @@ defmodule SymphonyEx.OrchestratorTest do
       snapshot = Orchestrator.snapshot(orchestrator)
       assert snapshot.lifecycle == custom_lifecycle
       assert Keyword.get(snapshot.tracker_opts, :lifecycle) == custom_lifecycle
+    end
+
+    test "blocks untrusted issues before creating a workspace or running the agent" do
+      issue =
+        issue_fixture("TRUST-1",
+          author_login: "external-contributor",
+          author_association: "CONTRIBUTOR"
+        )
+
+      start_supervised!({Control, test_pid: self(), candidate_batches: [[issue]]})
+
+      orchestrator =
+        start_orchestrator(
+          automation:
+            SymphonyEx.Automation.normalize(
+              issue_trust: [
+                require_trusted_author: true,
+                allowed_associations: ["OWNER", "MEMBER", "COLLABORATOR"],
+                allowed_actors: []
+              ]
+            )
+        )
+
+      Process.sleep(100)
+      snapshot = Orchestrator.snapshot(orchestrator)
+      assert snapshot.running == %{}
+      assert snapshot.retry_queue == %{}
+      assert snapshot.gated_issues["TRUST-1"].gating_reason == :untrusted_issue_author
+      assert Control.runs() == []
+      assert [%{payload: %{gating_reason: :untrusted_issue_author}}] = Control.updates()
     end
   end
 

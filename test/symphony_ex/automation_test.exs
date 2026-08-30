@@ -158,6 +158,60 @@ defmodule SymphonyEx.AutomationTest do
              {:error, {:unknown_service, "recipe"}}
   end
 
+  test "requires trusted issue author metadata when trust policy is enabled" do
+    config =
+      Automation.normalize(
+        issue_trust: [
+          require_trusted_author: true,
+          allowed_associations: ["OWNER", "MEMBER", "COLLABORATOR"],
+          allowed_actors: []
+        ]
+      )
+
+    assert Automation.issue_trust_result(
+             issue_fixture("Untrusted", author_association: "CONTRIBUTOR"),
+             config
+           ) ==
+             {:error, :untrusted_issue_author}
+
+    assert Automation.issue_trust_result(
+             issue_fixture("None", author_association: "NONE"),
+             config
+           ) ==
+             {:error, :untrusted_issue_author}
+
+    assert Automation.issue_trust_result(issue_fixture("Missing"), config) ==
+             {:error, :missing_issue_author_trust}
+  end
+
+  test "allows configured trusted associations and actor logins" do
+    config =
+      Automation.normalize(
+        issue_trust: [
+          require_trusted_author: true,
+          allowed_associations: ["OWNER", "MEMBER", "COLLABORATOR"],
+          allowed_actors: ["Trusted-Bot"]
+        ]
+      )
+
+    assert Automation.issue_trust_result(
+             issue_fixture("Member", author_association: "MEMBER"),
+             config
+           ) ==
+             :ok
+
+    assert Automation.issue_trust_result(
+             issue_fixture("Bot", author_login: "trusted-bot", author_association: "NONE"),
+             config
+           ) == :ok
+  end
+
+  test "trust policy is disabled by default for backward-compatible library use" do
+    config = Automation.normalize([])
+
+    assert Automation.issue_trust_result(issue_fixture("Legacy"), config) == :ok
+  end
+
   defp issue_fixture(title, attrs \\ []) do
     struct!(
       Issue,

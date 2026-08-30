@@ -183,6 +183,13 @@ defmodule SymphonyExWeb.DashboardLiveTest do
           concurrency_class: :docs,
           conflict_keys: MapSet.new(["service:docs"])
         }
+      },
+      gated_issues: %{
+        "TRUST-DASH" => %{
+          issue: issue_fixture("TRUST-DASH"),
+          gating_reason: :untrusted_issue_author,
+          concurrency_class: :default
+        }
       }
     }
 
@@ -206,6 +213,9 @@ defmodule SymphonyExWeb.DashboardLiveTest do
 
     assert html =~ "Symphony runtime dashboard"
     assert html =~ "Filters &amp; sorting"
+    assert html =~ "Gated issues"
+    assert html =~ "Gated only"
+    assert html =~ "untrusted_issue_author"
     assert html =~ "Running issues"
     assert html =~ "Retry queue"
     assert html =~ "Recent completions"
@@ -220,7 +230,7 @@ defmodule SymphonyExWeb.DashboardLiveTest do
     assert html =~ "Custom…"
     assert html =~ "History window"
     assert html =~ "Completed rows"
-    assert html =~ "Showing 4 matched issue(s)"
+    assert html =~ "Showing 5 matched issue(s)"
     assert html =~ "Success rate"
     assert html =~ "50.0%"
     assert html =~ "Avg runtime"

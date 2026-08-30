@@ -20,6 +20,14 @@ orchestrator:
   max-concurrent: 1
   max-retries: 0
   backoff-base-ms: 10000
+automation:
+  issue-trust:
+    require-trusted-author: true
+    allowed-associations:
+      - OWNER
+      - MEMBER
+      - COLLABORATOR
+    allowed-actors: []
 codex:
   command: codex app-server
   thread-sandbox: dangerFullAccess

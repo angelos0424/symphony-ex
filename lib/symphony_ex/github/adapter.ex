@@ -190,6 +190,9 @@ defmodule SymphonyEx.GitHub.Adapter do
       description: issue["body"] || "",
       url: issue["html_url"] || issue["url"],
       state: normalize_issue_state(issue),
+      author_login: issue_author_login(issue),
+      author_association:
+        optional_string(issue["author_association"] || issue["authorAssociation"]),
       priority: 0,
       labels: extract_labels(issue["labels"]),
       assignees: extract_assignees(issue["assignees"]),
@@ -2187,6 +2190,27 @@ defmodule SymphonyEx.GitHub.Adapter do
     |> Keyword.get(:active_states, ["In Progress", "Todo"])
     |> Enum.find(fn state_name -> state_name != in_progress_name end) || in_progress_name
   end
+
+  @spec issue_author_login(map()) :: String.t() | nil
+  defp issue_author_login(issue) do
+    login =
+      case issue["user"] || issue["author"] do
+        %{"login" => login} -> login
+        _other -> issue["author_login"] || issue["authorLogin"]
+      end
+
+    optional_string(login)
+  end
+
+  @spec optional_string(term()) :: String.t() | nil
+  defp optional_string(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  defp optional_string(_value), do: nil
 
   @spec normalize_issue_state(map()) :: String.t()
   defp normalize_issue_state(issue) do

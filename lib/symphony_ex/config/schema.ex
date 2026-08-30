@@ -74,6 +74,19 @@ defmodule SymphonyEx.Config.Schema do
     ]
   ]
 
+  @automation_issue_trust_schema [
+    type: :keyword_list,
+    default: [],
+    keys: [
+      require_trusted_author: [type: :boolean, default: false],
+      allowed_associations: [
+        type: {:list, :string},
+        default: ["OWNER", "MEMBER", "COLLABORATOR"]
+      ],
+      allowed_actors: [type: {:list, :string}, default: []]
+    ]
+  ]
+
   @automation_night_worker_schema [
     type: :keyword_list,
     default: [],
@@ -111,6 +124,7 @@ defmodule SymphonyEx.Config.Schema do
                 services: [type: {:list, :string}, default: []],
                 service_aliases: [type: :any, default: %{}],
                 service_concurrency: [type: :any, default: %{}],
+                issue_trust: @automation_issue_trust_schema,
                 reviewbot: [type: :any, default: []],
                 full_auto: @automation_full_auto_schema,
                 night_worker: @automation_night_worker_schema

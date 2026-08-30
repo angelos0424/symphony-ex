@@ -273,6 +273,38 @@ defmodule SymphonyEx.ConfigTest do
       end)
     end
 
+    test "parses issue trust policy from workflow" do
+      workflow = """
+      ---
+      automation:
+        issue-trust:
+          require-trusted-author: true
+          allowed-associations:
+            - OWNER
+            - MEMBER
+            - COLLABORATOR
+          allowed-actors:
+            - Trusted-Bot
+      tracker:
+        owner: openai
+        repo: symphony
+      workspace:
+        root: /tmp/worktrees
+        source_repo_path: /tmp/source
+      ---
+      """
+
+      path = write_workflow!(workflow)
+
+      with_env([{"GITHUB_TOKEN", "ghs_test"}], fn ->
+        issue_trust = Config.load!(path)[:automation][:issue_trust]
+
+        assert issue_trust[:require_trusted_author]
+        assert issue_trust[:allowed_associations] == ["OWNER", "MEMBER", "COLLABORATOR"]
+        assert issue_trust[:allowed_actors] == ["trusted-bot"]
+      end)
+    end
+
     test "rejects invalid automation combinations with clear errors" do
       duplicate_services =
         write_workflow!("""
