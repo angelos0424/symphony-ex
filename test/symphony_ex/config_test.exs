@@ -1,6 +1,8 @@
 defmodule SymphonyEx.ConfigTest do
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   alias SymphonyEx.Config
   alias SymphonyEx.Orchestrator.Lifecycle
 
@@ -46,6 +48,83 @@ defmodule SymphonyEx.ConfigTest do
           assert config[:codex][:command] == "codex app-server --stdio"
         end
       )
+    end
+
+    test "keeps tracker and agent credentials in separate config branches" do
+      workflow = """
+      ---
+      tracker:
+        owner: openai
+        repo: symphony
+      workspace:
+        root: /tmp/worktrees
+        source_repo_path: /tmp/source
+      ---
+      """
+
+      path = write_workflow!(workflow)
+
+      with_env(
+        [
+          {"GITHUB_TRACKER_TOKEN", "tracker-test-token"},
+          {"GITHUB_AGENT_TOKEN", "agent-test-token"}
+        ],
+        fn ->
+          config = Config.load!(path)
+
+          assert config[:tracker][:api_key] == "tracker-test-token"
+          assert config[:codex][:agent_token] == "agent-test-token"
+        end
+      )
+    end
+
+    test "does not treat a tracker token as an agent token after migration" do
+      workflow = """
+      ---
+      tracker:
+        owner: openai
+        repo: symphony
+      workspace:
+        root: /tmp/worktrees
+        source_repo_path: /tmp/source
+      ---
+      """
+
+      path = write_workflow!(workflow)
+
+      with_env([{"GITHUB_TRACKER_TOKEN", "tracker-test-token"}], fn ->
+        config = Config.load!(path)
+
+        assert config[:tracker][:api_key] == "tracker-test-token"
+        refute Keyword.has_key?(config[:codex], :agent_token)
+      end)
+    end
+
+    test "uses GITHUB_TOKEN as a compatibility alias with a deprecation warning" do
+      workflow = """
+      ---
+      tracker:
+        owner: openai
+        repo: symphony
+      workspace:
+        root: /tmp/worktrees
+        source_repo_path: /tmp/source
+      ---
+      """
+
+      path = write_workflow!(workflow)
+
+      log =
+        capture_log(fn ->
+          with_env([{"GITHUB_TOKEN", "legacy-test-token"}], fn ->
+            config = Config.load!(path)
+
+            assert config[:tracker][:api_key] == "legacy-test-token"
+            assert config[:codex][:agent_token] == "legacy-test-token"
+          end)
+        end)
+
+      assert log =~ "GITHUB_TOKEN is deprecated"
     end
 
     test "parses tracker lifecycle config into runtime lifecycle mappings" do
@@ -650,6 +729,8 @@ defmodule SymphonyEx.ConfigTest do
   @tracked_env_vars [
     "TRACKER_KIND",
     "GITHUB_TOKEN",
+    "GITHUB_TRACKER_TOKEN",
+    "GITHUB_AGENT_TOKEN",
     "GITHUB_OWNER",
     "GITHUB_REPO",
     "GITHUB_PROJECT_NUMBER",

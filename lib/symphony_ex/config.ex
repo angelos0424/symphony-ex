@@ -3,6 +3,8 @@ defmodule SymphonyEx.Config do
   Loads configuration from WORKFLOW.md YAML front matter and environment variables.
   """
 
+  require Logger
+
   alias SymphonyEx.Config.Schema
   alias SymphonyEx.Orchestrator.Lifecycle
   alias SymphonyEx.SourceRepo
@@ -132,9 +134,12 @@ defmodule SymphonyEx.Config do
 
   @spec load_env(keyword()) :: keyword()
   def load_env(yaml \\ []) do
+    maybe_warn_legacy_github_token()
+
     tracker_env = load_tracker_env(yaml)
     workspace_env = load_workspace_env()
     orchestrator_env = load_orchestrator_env()
+    codex_env = load_codex_env()
     logging_env = load_logging_env()
     dashboard_env = load_dashboard_env()
 
@@ -142,6 +147,7 @@ defmodule SymphonyEx.Config do
     |> maybe_put(:tracker, tracker_env)
     |> maybe_put(:workspace, workspace_env)
     |> maybe_put(:orchestrator, orchestrator_env)
+    |> maybe_put(:codex, codex_env)
     |> maybe_put(:logging, logging_env)
     |> maybe_put(:dashboard, dashboard_env)
   end
@@ -168,13 +174,49 @@ defmodule SymphonyEx.Config do
   defp github_tracker_env do
     []
     |> maybe_put(:kind, env_atom("TRACKER_KIND"))
-    |> maybe_put(:api_key, System.get_env("GITHUB_TOKEN"))
+    |> maybe_put(:api_key, tracker_token())
     |> maybe_put(:owner, System.get_env("GITHUB_OWNER"))
     |> maybe_put(:repo, System.get_env("GITHUB_REPO"))
     |> maybe_put(:project_number, env_integer("GITHUB_PROJECT_NUMBER"))
     |> maybe_put(:endpoint, System.get_env("GITHUB_API_URL"))
     |> maybe_put(:graphql_endpoint, System.get_env("GITHUB_GRAPHQL_URL"))
     |> normalize_tracker_kind(:github)
+  end
+
+  @spec load_codex_env() :: keyword()
+  defp load_codex_env do
+    agent_token =
+      present_env("GITHUB_AGENT_TOKEN") ||
+        if is_nil(present_env("GITHUB_TRACKER_TOKEN")),
+          do: present_env("GITHUB_TOKEN"),
+          else: nil
+
+    maybe_put([], :agent_token, agent_token)
+  end
+
+  @spec tracker_token() :: String.t() | nil
+  defp tracker_token do
+    present_env("GITHUB_TRACKER_TOKEN") || present_env("GITHUB_TOKEN")
+  end
+
+  @spec maybe_warn_legacy_github_token() :: :ok
+  defp maybe_warn_legacy_github_token do
+    if present_env("GITHUB_TOKEN") do
+      Logger.warning(
+        "GITHUB_TOKEN is deprecated; set GITHUB_TRACKER_TOKEN and GITHUB_AGENT_TOKEN instead"
+      )
+    end
+
+    :ok
+  end
+
+  @spec present_env(String.t()) :: String.t() | nil
+  defp present_env(name) do
+    case System.get_env(name) do
+      nil -> nil
+      "" -> nil
+      value -> value
+    end
   end
 
   @spec normalize_tracker_kind(keyword(), :github) :: keyword()

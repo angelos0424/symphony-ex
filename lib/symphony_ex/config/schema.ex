@@ -197,6 +197,7 @@ defmodule SymphonyEx.Config.Schema do
               default: [],
               keys: [
                 command: [type: :string, default: "codex app-server"],
+                agent_token: [type: :string],
                 approval_policy: [
                   type: {:in, [:on_request, :on_failure, :never]},
                   default: :never

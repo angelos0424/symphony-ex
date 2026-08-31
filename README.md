@@ -101,7 +101,8 @@ dashboard:
 ## Environment variables
 
 ```bash
-export GITHUB_TOKEN=ghp_xxx
+export GITHUB_TRACKER_TOKEN=ghp_tracker_xxx
+export GITHUB_AGENT_TOKEN=ghp_agent_xxx
 export GITHUB_OWNER=example-org
 export GITHUB_REPO=example-repo
 export GITHUB_PROJECT_NUMBER=7
@@ -115,13 +116,20 @@ export SYMPHONY_LOG_REDACT_KEYS=api_key,authorization,token
 export SYMPHONY_LOG_MAX_METADATA_VALUE_LENGTH=512
 ```
 
+`GITHUB_TRACKER_TOKEN` is used by the orchestrator for GitHub Issue/Project
+reads and lifecycle write-back. `GITHUB_AGENT_TOKEN` is the repo-scoped token
+made available to Codex for clone, push, and pull-request operations. The
+legacy `GITHUB_TOKEN` remains a warning-producing compatibility alias for one
+release; migrate to both split variables before removing it.
+
 ## Runtime bootstrap
 
 The OTP app can bootstrap itself from a workflow file:
 
 ```bash
 export SYMPHONY_WORKFLOW_PATH=/path/to/WORKFLOW.md
-export GITHUB_TOKEN=ghp_xxx
+export GITHUB_TRACKER_TOKEN=ghp_tracker_xxx
+export GITHUB_AGENT_TOKEN=ghp_agent_xxx
 export GITHUB_OWNER=example-org
 export GITHUB_REPO=example-repo
 export GITHUB_PROJECT_NUMBER=7
@@ -193,8 +201,8 @@ This starter is intentionally conservative for small hosts:
 - `poll-interval-ms: 60000`
 - `max-concurrent: 1`
 - dashboard disabled
-- GitHub API auth via `GITHUB_TOKEN`
-- git clone/fetch auth via SSH (`git@github.com:...`)
+- GitHub API auth via `GITHUB_TRACKER_TOKEN`
+- Codex clone/push/PR auth via `GITHUB_AGENT_TOKEN`
 
 ## Development
 

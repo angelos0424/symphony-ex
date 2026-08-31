@@ -19,7 +19,8 @@ defmodule SymphonyEx.Codex.AppServer do
           command: String.t(),
           cwd: String.t(),
           capabilities: map(),
-          status: :idle | :initializing | :running | :stopped
+          status: :idle | :initializing | :running | :stopped,
+          env: [{charlist(), charlist() | false}]
         }
 
   @method_fallbacks %{
@@ -95,6 +96,7 @@ defmodule SymphonyEx.Codex.AppServer do
   def init(opts) do
     command = Keyword.fetch!(opts, :command)
     cwd = Keyword.fetch!(opts, :cwd)
+    env = Keyword.get(opts, :env, [{~c"TERM", ~c"dumb"}])
 
     state = %{
       port: nil,
@@ -105,7 +107,8 @@ defmodule SymphonyEx.Codex.AppServer do
       command: command,
       cwd: cwd,
       capabilities: %{},
-      status: :idle
+      status: :idle,
+      env: env
     }
 
     {:ok, state}
@@ -113,9 +116,11 @@ defmodule SymphonyEx.Codex.AppServer do
 
   @impl true
   def handle_call(:initialize, from, %{status: :idle} = state) do
-    port = spawn_codex(state.command, state.cwd)
+    port = spawn_codex(state.command, state.cwd, state.env)
 
-    state = %{state | port: port, status: :initializing}
+    # Do not retain credential-bearing environment values in the GenServer
+    # state after the Port has inherited them.
+    state = %{state | port: port, status: :initializing, env: []}
     send_rpc(state, "initialize", initialize_params(), from)
   end
 
@@ -185,8 +190,8 @@ defmodule SymphonyEx.Codex.AppServer do
 
   # --- Private ---
 
-  @spec spawn_codex(String.t(), String.t()) :: port()
-  defp spawn_codex(command, cwd) do
+  @spec spawn_codex(String.t(), String.t(), [{charlist(), charlist() | false}]) :: port()
+  defp spawn_codex(command, cwd, env) do
     Port.open(
       {:spawn, "bash -lc '#{command}'"},
       [
@@ -194,7 +199,7 @@ defmodule SymphonyEx.Codex.AppServer do
         :exit_status,
         {:line, 10_485_760},
         {:cd, cwd},
-        {:env, [{~c"TERM", ~c"dumb"}]}
+        {:env, env}
       ]
     )
   end

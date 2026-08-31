@@ -169,6 +169,20 @@ defmodule SymphonyEx.GitHub.ClientTest do
     assert request.options[:params][:state] == "open"
   end
 
+  test "uses the tracker credential when an agent credential is also present" do
+    opts = [
+      tracker_token: "tracker-test-token",
+      agent_token: "agent-test-token",
+      owner: "example",
+      repo: "repo",
+      request_fun: &GitHubClientStub.request/1
+    ]
+
+    assert {:ok, [_issue]} = Client.fetch_candidate_issues(opts)
+    assert_received {:github_request, request}
+    assert request.headers["authorization"] == ["Bearer tracker-test-token"]
+  end
+
   test "filters candidate issues by include_issue_identifiers" do
     opts = [
       api_key: "gh-token",

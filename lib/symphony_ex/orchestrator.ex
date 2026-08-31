@@ -573,6 +573,7 @@ defmodule SymphonyEx.Orchestrator do
                     state.agent_runner.run(issue,
                       workspace_path: workspace_path,
                       workflow_path: state.workflow_path,
+                      tracker_opts: state.tracker_opts,
                       codex: state.codex_opts
                     )
 
