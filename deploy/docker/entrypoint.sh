@@ -6,11 +6,45 @@ if [ -z "$agent_token" ] && [ -z "${GITHUB_TRACKER_TOKEN:-}" ]; then
   agent_token="${GITHUB_TOKEN:-}"
 fi
 
+# Remove stale token-bearing configuration even when agent dispatch is blocked.
+remove_legacy_git_auth_config() {
+  config_file="${GIT_CONFIG_GLOBAL:-${HOME:-/root}/.gitconfig}"
+
+  if [ ! -f "$config_file" ]; then
+    return 0
+  fi
+
+  temp_config="$(mktemp "${config_file}.tmp.XXXXXX")"
+  in_token_url_section=0
+
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      '[url "https://x-access-token:'*'@github.com/"]')
+        in_token_url_section=1
+        continue
+        ;;
+      \[*\])
+        in_token_url_section=0
+        ;;
+    esac
+
+    if [ "$in_token_url_section" -eq 0 ]; then
+      printf "%s\\n" "$line" >> "$temp_config"
+    fi
+  done < "$config_file"
+
+  if ! cmp -s "$config_file" "$temp_config"; then
+    chmod 600 "$temp_config"
+    mv "$temp_config" "$config_file"
+  else
+    rm -f "$temp_config"
+  fi
+}
+
+remove_legacy_git_auth_config
+git config --global --unset-all credential.helper 2>/dev/null || true
+
 if [ -n "$agent_token" ]; then
-  # Remove URL rewrites from older images without exposing their token value.
-  git config --global --unset-regexp \
-    '^url\.https://x-access-token:.*@github\.com/\.insteadOf$' 2>/dev/null || true
-  git config --global --unset-all credential.helper 2>/dev/null || true
   # Resolve the token at credential-helper runtime, not while configuring Git.
   git config --global credential.helper \
     '!f() {
