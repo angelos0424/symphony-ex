@@ -85,9 +85,9 @@ git worktree prune --dry-run
 - main 검증: `0ddbc0558d31392d18279c9b596f7a6820b90cf4`에서 format PASS, focused `67 tests/0 failures`, full `225 tests/0 failures`; GitHub Actions workflow 없음
 - 다음 정확한 작업: `PR-1B / TRUST-03`을 새 GitHub Issue로 등록하고, Issue 기준 branch에서만 pick/구현 시작
 
-그 외 구현 Task는 `Todo`이며, 다음 Task의 Issue 생성과 pick은 아직 완료되지 않은 상태다.
+그 외 구현 Task는 `Todo`이며, 각 Task는 Issue와 branch를 만든 뒤 순차적으로 pick한다.
 
-현재 후속 활성 작업:
+완료된 후속 작업:
 
 - `PR-1A-FU / TRUST-01·02` — **Done**
 - Issue: [#34](https://github.com/angelos0424/symphony-ex/issues/34)
@@ -96,7 +96,14 @@ git worktree prune --dry-run
 - 구현/리뷰/merge: 완료
 - merge commit: `d7a64c14352e48611a7fced969f3ab99587191e2`
 - main 검증: `d7a64c14352e48611a7fced969f3ab99587191e2`에서 format PASS, focused `60 tests/0 failures`, full `227 tests/0 failures`; GitHub Actions workflow 없음
-- 다음 정확한 작업: `PR-1B / TRUST-03`을 새 GitHub Issue로 등록하고, Issue 기준 branch에서만 pick/구현 시작
+
+현재 활성 작업:
+
+- `PR-1B / TRUST-03` — **Picked Up**
+- Issue: [#36](https://github.com/angelos0424/symphony-ex/issues/36)
+- Branch: `fix/issue-36-trust-03-credentials`
+- Objective: agent와 tracker/orchestrator 자격증명을 분리하고 Codex subprocess 환경을 최소화
+- 다음 gate: RED 테스트 작성 및 기존 credential 전달 경로 검증
 
 ## 3. 설계 원칙
 
