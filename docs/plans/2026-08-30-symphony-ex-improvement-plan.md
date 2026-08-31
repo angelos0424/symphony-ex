@@ -97,15 +97,20 @@ git worktree prune --dry-run
 - merge commit: `d7a64c14352e48611a7fced969f3ab99587191e2`
 - main 검증: `d7a64c14352e48611a7fced969f3ab99587191e2`에서 format PASS, focused `60 tests/0 failures`, full `227 tests/0 failures`; GitHub Actions workflow 없음
 
+- `PR-1B / TRUST-03` — **Done**
+- Issue: [#36](https://github.com/angelos0424/symphony-ex/issues/36)
+- PR: [#37](https://github.com/angelos0424/symphony-ex/pull/37)
+- 구현/리뷰/merge: 완료
+- merge commit: `16d16b419d42b5eaddac36ce1ac64d5f1d57887b`
+- main 검증: `16d16b419d42b5eaddac36ce1ac64d5f1d57887b`에서 format PASS, full `234 tests/0 failures`; GitHub Actions workflow 없음
+
 현재 활성 작업:
 
-- `PR-1B / TRUST-03` — **Review**
-- Issue: [#36](https://github.com/angelos0424/symphony-ex/issues/36)
-- Branch: `fix/issue-36-trust-03-credentials`
-- Objective: agent와 tracker/orchestrator 자격증명을 분리하고 Codex subprocess 환경을 최소화
-- 구현/로컬 검증: 완료
-- validation: focused `55 tests/0 failures`, full `234 tests/0 failures`, format PASS, Entrypoint `sh -n` PASS, Compose 3종 `config --quiet` PASS
-- 다음 gate: 동일 immutable SHA 기준 spec compliance 및 quality/security review
+- `PR-0 / SEC-01·02·03` — **Picked Up**
+- Issue: [#38](https://github.com/angelos0424/symphony-ex/issues/38)
+- Branch: `fix/issue-38-pr0-dashboard-security`
+- Objective: Dashboard/API를 인증된 read-only observer로 만들고 runtime control을 명시적으로 분리
+- 다음 action: branch에서 RED 테스트와 현행 auth 경계 조사
 
 ## 3. 설계 원칙
 
