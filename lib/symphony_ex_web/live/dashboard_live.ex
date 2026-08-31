@@ -9,6 +9,8 @@ defmodule SymphonyExWeb.DashboardLive do
 
   use SymphonyExWeb, :live_view
 
+  on_mount({SymphonyExWeb.DashboardAuth, :ensure_authenticated})
+
   alias SymphonyEx.{Dashboard, RuntimeControl, RuntimeSnapshot}
 
   @default_filters %{
@@ -116,6 +118,7 @@ defmodule SymphonyExWeb.DashboardLive do
      |> assign(:completed_window_options, @completed_window_options)
      |> assign(:completed_limit_options, @completed_limit_options)
      |> assign(:error_category_options, @error_category_options)
+     |> assign(:controls_enabled, controls_enabled?())
      |> assign_snapshot(current_snapshot())}
   end
 
@@ -129,6 +132,7 @@ defmodule SymphonyExWeb.DashboardLive do
      socket
      |> assign(:filters, filters)
      |> assign(:selected_identifier, selected_identifier)
+     |> assign(:controls_enabled, controls_enabled?())
      |> assign(:page_title, page_title(live_action, selected_identifier))
      |> assign_snapshot(socket.assigns.snapshot)}
   end
@@ -147,11 +151,31 @@ defmodule SymphonyExWeb.DashboardLive do
 
   @impl true
   def handle_event("save_runtime_settings", %{"runtime" => params}, socket) do
+    if controls_enabled?() do
+      apply_runtime_settings(socket, params)
+    else
+      {:noreply, put_flash(socket, :error, controls_disabled_message())}
+    end
+  end
+
+  @impl true
+  def handle_event("restart_component", %{"component" => component}, socket) do
+    if controls_enabled?() do
+      restart_runtime_component(socket, component)
+    else
+      {:noreply, put_flash(socket, :error, controls_disabled_message())}
+    end
+  end
+
+  defp apply_runtime_settings(socket, params) do
     case RuntimeControl.apply_orchestrator_settings(params) do
       {:ok, _result} ->
         {:noreply,
          socket
-         |> put_flash(:info, "Saved WORKFLOW orchestrator settings and reloaded runtime config.")
+         |> put_flash(
+           :info,
+           "Saved WORKFLOW orchestrator settings and reloaded runtime config."
+         )
          |> assign_snapshot(current_snapshot())}
 
       {:error, reason} ->
@@ -159,8 +183,7 @@ defmodule SymphonyExWeb.DashboardLive do
     end
   end
 
-  @impl true
-  def handle_event("restart_component", %{"component" => component}, socket) do
+  defp restart_runtime_component(socket, component) do
     case component_from_param(component) do
       {:ok, component_name} ->
         case RuntimeControl.restart_component(component_name) do
@@ -741,38 +764,44 @@ defmodule SymphonyExWeb.DashboardLive do
                 or restart bounded runtime components from this dashboard.
               </p>
 
-              <.form for={%{}} as={:runtime} phx-submit="save_runtime_settings" style="display: grid; gap: 10px;">
-                <label style={field_label_style()}>
-                  Poll interval (ms)
-                  <input type="number" min="1" name="runtime[poll_interval_ms]" value={@snapshot.settings.poll_interval_ms} style={input_style()} />
-                </label>
+              <%= if @controls_enabled do %>
+                <.form for={%{}} as={:runtime} phx-submit="save_runtime_settings" style="display: grid; gap: 10px;">
+                  <label style={field_label_style()}>
+                    Poll interval (ms)
+                    <input type="number" min="1" name="runtime[poll_interval_ms]" value={@snapshot.settings.poll_interval_ms} style={input_style()} />
+                  </label>
 
-                <label style={field_label_style()}>
-                  Max concurrent
-                  <input type="number" min="1" name="runtime[max_concurrent]" value={@snapshot.settings.max_concurrent} style={input_style()} />
-                </label>
+                  <label style={field_label_style()}>
+                    Max concurrent
+                    <input type="number" min="1" name="runtime[max_concurrent]" value={@snapshot.settings.max_concurrent} style={input_style()} />
+                  </label>
 
-                <label style={field_label_style()}>
-                  Max retries
-                  <input type="number" min="0" name="runtime[max_retries]" value={@snapshot.settings.max_retries} style={input_style()} />
-                </label>
+                  <label style={field_label_style()}>
+                    Max retries
+                    <input type="number" min="0" name="runtime[max_retries]" value={@snapshot.settings.max_retries} style={input_style()} />
+                  </label>
 
-                <label style={field_label_style()}>
-                  Retry backoff base (ms)
-                  <input type="number" min="1" name="runtime[backoff_base_ms]" value={@snapshot.settings.retry_backoff_ms} style={input_style()} />
-                </label>
+                  <label style={field_label_style()}>
+                    Retry backoff base (ms)
+                    <input type="number" min="1" name="runtime[backoff_base_ms]" value={@snapshot.settings.retry_backoff_ms} style={input_style()} />
+                  </label>
 
-                <button type="submit" style={primary_button_style()}>Save settings & reload</button>
-              </.form>
+                  <button type="submit" style={primary_button_style()}>Save settings & reload</button>
+                </.form>
 
-              <div style="display: grid; gap: 8px; margin-top: 14px;">
-                <button type="button" phx-click="restart_component" phx-value-component="orchestrator" style={secondary_button_style()}>
-                  Restart orchestrator
-                </button>
-                <button type="button" phx-click="restart_component" phx-value-component="endpoint" style={secondary_button_style()}>
-                  Restart dashboard endpoint
-                </button>
-              </div>
+                <div style="display: grid; gap: 8px; margin-top: 14px;">
+                  <button type="button" phx-click="restart_component" phx-value-component="orchestrator" style={secondary_button_style()}>
+                    Restart orchestrator
+                  </button>
+                  <button type="button" phx-click="restart_component" phx-value-component="endpoint" style={secondary_button_style()}>
+                    Restart dashboard endpoint
+                  </button>
+                </div>
+              <% else %>
+                <p style="margin: 8px 0 0; color: #6b7280; line-height: 1.5;">
+                  Runtime controls are disabled. Set `dashboard.controls-enabled: true` explicitly to enable them.
+                </p>
+              <% end %>
             </section>
 
             <section style={panel_style()}>
@@ -988,6 +1017,19 @@ defmodule SymphonyExWeb.DashboardLive do
 
   defp current_snapshot do
     RuntimeSnapshot.from_orchestrator(orchestrator_server())
+  end
+
+  @spec controls_enabled?() :: boolean()
+  defp controls_enabled? do
+    case Application.get_env(:symphony_ex, :dashboard_config, []) do
+      config when is_list(config) -> Keyword.get(config, :controls_enabled, false)
+      _other -> false
+    end
+  end
+
+  @spec controls_disabled_message() :: String.t()
+  defp controls_disabled_message do
+    "Runtime controls are disabled by dashboard configuration."
   end
 
   defp assign_snapshot(socket, snapshot) do

@@ -595,6 +595,138 @@ defmodule SymphonyEx.ConfigTest do
       )
     end
 
+    test "normalizes dashboard auth, controls, and allowed origins from env" do
+      workflow = """
+      ---
+      tracker:
+        owner: openai
+        repo: symphony
+      workspace:
+        root: /tmp/worktrees
+        source_repo_path: /tmp/source
+      dashboard:
+        enabled: true
+        host: 0.0.0.0
+      ---
+      """
+
+      path = write_workflow!(workflow)
+
+      with_env(
+        [
+          {"GITHUB_TOKEN", "ghs_test"},
+          {"SYMPHONY_DASHBOARD_SECRET_KEY_BASE", "test-dashboard-secret-key-base"},
+          {"SYMPHONY_DASHBOARD_CONTROLS_ENABLED", "true"},
+          {"SYMPHONY_DASHBOARD_AUTH_MODE", "basic"},
+          {"SYMPHONY_DASHBOARD_USERNAME", "operator"},
+          {"SYMPHONY_DASHBOARD_PASSWORD", "dashboard-password-sentinel"},
+          {"SYMPHONY_DASHBOARD_ALLOWED_ORIGINS",
+           "https://dashboard.example, https://backup.example"}
+        ],
+        fn ->
+          config = Config.load!(path)
+          dashboard = config[:dashboard]
+
+          assert dashboard[:controls_enabled]
+          assert dashboard[:auth][:mode] == :basic
+          assert dashboard[:auth][:username] == "operator"
+          assert dashboard[:auth][:password] == "dashboard-password-sentinel"
+
+          assert dashboard[:allowed_origins] == [
+                   "https://dashboard.example",
+                   "https://backup.example"
+                 ]
+        end
+      )
+    end
+
+    test "defaults dashboard controls to disabled for loopback observers" do
+      workflow = """
+      ---
+      tracker:
+        owner: openai
+        repo: symphony
+      workspace:
+        root: /tmp/worktrees
+        source_repo_path: /tmp/source
+      dashboard:
+        enabled: true
+        host: 127.0.0.1
+        secret-key-base: test-dashboard-secret-key-base
+      ---
+      """
+
+      path = write_workflow!(workflow)
+
+      with_env([{"GITHUB_TOKEN", "ghs_test"}], fn ->
+        dashboard = Config.load!(path)[:dashboard]
+
+        assert dashboard[:controls_enabled] == false
+        assert dashboard[:allowed_origins] == []
+        refute dashboard[:auth][:username]
+        refute dashboard[:auth][:password]
+      end)
+    end
+
+    test "rejects a non-loopback dashboard without configured authentication" do
+      workflow = """
+      ---
+      tracker:
+        owner: openai
+        repo: symphony
+      workspace:
+        root: /tmp/worktrees
+        source_repo_path: /tmp/source
+      dashboard:
+        enabled: true
+        host: 0.0.0.0
+        secret-key-base: test-dashboard-secret-key-base
+      ---
+      """
+
+      path = write_workflow!(workflow)
+
+      with_env([{"GITHUB_TOKEN", "ghs_test"}], fn ->
+        assert {:error, error} = Config.load(path)
+        message = Exception.message(error)
+
+        assert message =~ "dashboard.auth.username"
+        assert message =~ "dashboard.auth.password"
+        assert message =~ "SYMPHONY_DASHBOARD_USERNAME"
+        assert message =~ "SYMPHONY_DASHBOARD_PASSWORD"
+      end)
+    end
+
+    test "rejects incomplete dashboard basic authentication" do
+      workflow = """
+      ---
+      tracker:
+        owner: openai
+        repo: symphony
+      workspace:
+        root: /tmp/worktrees
+        source_repo_path: /tmp/source
+      dashboard:
+        enabled: true
+        host: 127.0.0.1
+        secret-key-base: test-dashboard-secret-key-base
+        auth:
+          mode: basic
+          username: operator
+      ---
+      """
+
+      path = write_workflow!(workflow)
+
+      with_env([{"GITHUB_TOKEN", "ghs_test"}], fn ->
+        assert {:error, error} = Config.load(path)
+        message = Exception.message(error)
+
+        assert message =~ "dashboard.auth.password"
+        assert message =~ "SYMPHONY_DASHBOARD_PASSWORD"
+      end)
+    end
+
     test "resolves SOURCE_REPO_URL into a canonical cached source repo path" do
       remote = git_fixture_repo!("source-repo-url")
 
@@ -750,6 +882,15 @@ defmodule SymphonyEx.ConfigTest do
     "SYMPHONY_LOG_METADATA",
     "SYMPHONY_LOG_REDACT_KEYS",
     "SYMPHONY_LOG_MAX_METADATA_VALUE_LENGTH",
+    "SYMPHONY_DASHBOARD_ENABLED",
+    "SYMPHONY_DASHBOARD_PORT",
+    "SYMPHONY_DASHBOARD_HOST",
+    "SYMPHONY_DASHBOARD_CONTROLS_ENABLED",
+    "SYMPHONY_DASHBOARD_AUTH_MODE",
+    "SYMPHONY_DASHBOARD_USERNAME",
+    "SYMPHONY_DASHBOARD_PASSWORD",
+    "SYMPHONY_DASHBOARD_ALLOWED_ORIGINS",
+    "SYMPHONY_DASHBOARD_SECRET_KEY_BASE",
     "SYMPHONY_WORKFLOW_PATH",
     "WORKFLOW_PATH"
   ]

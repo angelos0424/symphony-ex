@@ -6,11 +6,13 @@ defmodule SymphonyExWeb.Router do
   pipeline :browser do
     plug(:accepts, ["html"])
     plug(:fetch_session)
+    plug(SymphonyExWeb.DashboardAuth)
     plug(:put_root_layout, false)
   end
 
   pipeline :api do
     plug(:accepts, ["json"])
+    plug(SymphonyExWeb.DashboardAuth)
   end
 
   scope "/", SymphonyExWeb do

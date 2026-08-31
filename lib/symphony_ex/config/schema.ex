@@ -106,6 +106,16 @@ defmodule SymphonyEx.Config.Schema do
     ]
   ]
 
+  @dashboard_auth_schema [
+    type: :keyword_list,
+    default: [],
+    keys: [
+      mode: [type: {:in, [:basic, "basic"]}, default: :basic],
+      username: [type: :string],
+      password: [type: :string]
+    ]
+  ]
+
   @schema NimbleOptions.new!(
             automation: [
               type: :keyword_list,
@@ -238,7 +248,10 @@ defmodule SymphonyEx.Config.Schema do
                 enabled: [type: :boolean, default: false],
                 port: [type: :pos_integer, default: 4000],
                 host: [type: :string, default: "127.0.0.1"],
-                secret_key_base: [type: :string]
+                secret_key_base: [type: :string],
+                controls_enabled: [type: :boolean, default: false],
+                auth: @dashboard_auth_schema,
+                allowed_origins: [type: {:list, :string}, default: []]
               ]
             ]
           )
@@ -288,19 +301,71 @@ defmodule SymphonyEx.Config.Schema do
   defp blank_tracker_value?(""), do: true
   defp blank_tracker_value?(_value), do: false
 
+  @doc false
   @spec validate_dashboard_requirements!(keyword()) :: keyword()
-  defp validate_dashboard_requirements!(opts) do
+  def validate_dashboard_requirements!(opts) do
     dashboard = Keyword.get(opts, :dashboard, [])
     enabled = Keyword.get(dashboard, :enabled, false)
     secret_key_base = dashboard |> Keyword.get(:secret_key_base) |> normalize_optional_string()
 
-    if enabled and is_nil(secret_key_base) do
-      raise ArgumentError,
-            "dashboard.secret_key_base is required when dashboard.enabled is true"
+    if enabled do
+      if is_nil(secret_key_base) do
+        raise ArgumentError,
+              "dashboard.secret_key_base is required when dashboard.enabled is true"
+      end
+
+      validate_dashboard_auth!(dashboard)
     end
 
     opts
   end
+
+  @spec validate_dashboard_auth!(keyword()) :: :ok
+  defp validate_dashboard_auth!(dashboard) do
+    auth = Keyword.get(dashboard, :auth, [])
+    username = auth |> Keyword.get(:username) |> normalize_optional_string()
+    password = auth |> Keyword.get(:password) |> normalize_optional_string()
+
+    cond do
+      is_nil(username) and is_nil(password) and non_loopback_host?(Keyword.get(dashboard, :host)) ->
+        raise ArgumentError,
+              "dashboard.auth.username and dashboard.auth.password are required for non-loopback " <>
+                "dashboard.host; set SYMPHONY_DASHBOARD_USERNAME and " <>
+                "SYMPHONY_DASHBOARD_PASSWORD"
+
+      is_nil(username) != is_nil(password) ->
+        raise ArgumentError,
+              "dashboard.auth.username and dashboard.auth.password must be provided together; " <>
+                "set SYMPHONY_DASHBOARD_USERNAME and SYMPHONY_DASHBOARD_PASSWORD"
+
+      true ->
+        :ok
+    end
+  end
+
+  @spec non_loopback_host?(term()) :: boolean()
+  defp non_loopback_host?(host) when is_binary(host) do
+    case String.trim(host) do
+      "localhost" ->
+        false
+
+      "127.0.0.1" ->
+        false
+
+      "::1" ->
+        false
+
+      value ->
+        case :inet.parse_address(String.to_charlist(value)) do
+          {:ok, {127, _a, _b, _c}} -> false
+          {:ok, {0, 0, 0, 0, 0, 0, 0, 1}} -> false
+          {:ok, _address} -> true
+          {:error, _reason} -> true
+        end
+    end
+  end
+
+  defp non_loopback_host?(_host), do: true
 
   @doc false
   @spec validate_project_fields(term()) :: {:ok, map() | keyword()} | {:error, String.t()}

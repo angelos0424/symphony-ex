@@ -58,6 +58,7 @@ defmodule SymphonyEx.Config do
             |> SymphonyEx.Automation.validate!()
 
           validated = Keyword.put(validated, :automation, automation)
+          validated = Schema.validate_dashboard_requirements!(validated)
 
           with {:ok, validated} <- validate_tracker_requirements(validated) do
             {:ok, normalize_runtime_structs(validated)}
@@ -83,39 +84,12 @@ defmodule SymphonyEx.Config do
         value == nil or value == ""
       end)
 
-    cond do
-      missing_keys != [] ->
-        {:error, {:missing_tracker_keys, kind, Enum.map_join(missing_keys, ", ", &inspect/1)}}
-
-      dashboard_secret_required?(opts) ->
-        {:error,
-         ArgumentError.exception(
-           "dashboard.secret_key_base is required when dashboard.enabled is true"
-         )}
-
-      true ->
-        {:ok, opts}
+    if missing_keys == [] do
+      {:ok, opts}
+    else
+      {:error, {:missing_tracker_keys, kind, Enum.map_join(missing_keys, ", ", &inspect/1)}}
     end
   end
-
-  @spec dashboard_secret_required?(keyword()) :: boolean()
-  defp dashboard_secret_required?(opts) do
-    dashboard = Keyword.get(opts, :dashboard, [])
-    enabled = Keyword.get(dashboard, :enabled, false)
-    secret_key_base = dashboard |> Keyword.get(:secret_key_base) |> normalize_optional_string()
-
-    enabled and is_nil(secret_key_base)
-  end
-
-  @spec normalize_optional_string(term()) :: String.t() | nil
-  defp normalize_optional_string(value) when is_binary(value) do
-    case String.trim(value) do
-      "" -> nil
-      trimmed -> trimmed
-    end
-  end
-
-  defp normalize_optional_string(_value), do: nil
 
   @spec parse_front_matter!(String.t()) :: keyword()
   def parse_front_matter!(path) do
@@ -418,7 +392,52 @@ defmodule SymphonyEx.Config do
     |> maybe_put(:enabled, env_boolean("SYMPHONY_DASHBOARD_ENABLED"))
     |> maybe_put(:port, env_integer("SYMPHONY_DASHBOARD_PORT"))
     |> maybe_put(:host, System.get_env("SYMPHONY_DASHBOARD_HOST"))
+    |> maybe_put(:controls_enabled, env_boolean("SYMPHONY_DASHBOARD_CONTROLS_ENABLED"))
+    |> maybe_put(:auth, load_dashboard_auth_env())
+    |> maybe_put(:allowed_origins, env_string_list("SYMPHONY_DASHBOARD_ALLOWED_ORIGINS"))
     |> maybe_put(:secret_key_base, System.get_env("SYMPHONY_DASHBOARD_SECRET_KEY_BASE"))
+  end
+
+  @spec load_dashboard_auth_env() :: keyword()
+  defp load_dashboard_auth_env do
+    []
+    |> maybe_put(:mode, env_dashboard_auth_mode())
+    |> maybe_put(:username, System.get_env("SYMPHONY_DASHBOARD_USERNAME"))
+    |> maybe_put(:password, System.get_env("SYMPHONY_DASHBOARD_PASSWORD"))
+  end
+
+  @spec env_dashboard_auth_mode() :: :basic | nil
+  defp env_dashboard_auth_mode do
+    case System.get_env("SYMPHONY_DASHBOARD_AUTH_MODE") do
+      nil ->
+        nil
+
+      "" ->
+        nil
+
+      value ->
+        case value |> String.trim() |> String.downcase() do
+          "basic" -> :basic
+          _other -> raise ArgumentError, "invalid SYMPHONY_DASHBOARD_AUTH_MODE; expected basic"
+        end
+    end
+  end
+
+  @spec env_string_list(String.t()) :: [String.t()] | nil
+  defp env_string_list(name) do
+    case System.get_env(name) do
+      nil ->
+        nil
+
+      "" ->
+        nil
+
+      value ->
+        value
+        |> String.split(",", trim: true)
+        |> Enum.map(&String.trim/1)
+        |> Enum.reject(&(&1 == ""))
+    end
   end
 
   @spec env_boolean(String.t()) :: boolean() | nil
