@@ -113,9 +113,12 @@ services:
       - SOURCE_CACHE_ROOT=/opt/symphony/source-cache
       - SYMPHONY_DASHBOARD_ENABLED=true
       - SYMPHONY_DASHBOARD_PORT=4000
-      - SYMPHONY_DASHBOARD_HOST=127.0.0.1
+      - SYMPHONY_DASHBOARD_HOST=0.0.0.0
       - SYMPHONY_DASHBOARD_CONTROLS_ENABLED=false
       - SYMPHONY_DASHBOARD_AUTH_MODE=basic
+      - SYMPHONY_DASHBOARD_USERNAME=operator
+      - SYMPHONY_DASHBOARD_PASSWORD=replace-with-dashboard-password
+      - SYMPHONY_DASHBOARD_ALLOWED_ORIGINS=http://127.0.0.1:4000,http://localhost:4000
       - SYMPHONY_DASHBOARD_SECRET_KEY_BASE=replace-with-a-long-random-secret
       - SYMPHONY_LOG_FORMAT=json
     ports:
