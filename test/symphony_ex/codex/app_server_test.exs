@@ -50,6 +50,7 @@ defmodule SymphonyEx.Codex.AppServerTest do
 
     assert {:ok, %{"safe" => true}} = AppServer.initialize(server)
     assert AppServer.alive?(server)
+    assert :sys.get_state(server).env == []
     assert :ok = AppServer.shutdown(server)
   end
 

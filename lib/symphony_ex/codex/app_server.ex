@@ -118,7 +118,9 @@ defmodule SymphonyEx.Codex.AppServer do
   def handle_call(:initialize, from, %{status: :idle} = state) do
     port = spawn_codex(state.command, state.cwd, state.env)
 
-    state = %{state | port: port, status: :initializing}
+    # Do not retain credential-bearing environment values in the GenServer
+    # state after the Port has inherited them.
+    state = %{state | port: port, status: :initializing, env: []}
     send_rpc(state, "initialize", initialize_params(), from)
   end
 
