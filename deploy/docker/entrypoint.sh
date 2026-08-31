@@ -1,8 +1,13 @@
 #!/bin/sh
 set -eu
 
-if [ -n "${GITHUB_TOKEN:-}" ]; then
-  git config --global url."https://x-access-token:${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
+agent_token="${GITHUB_AGENT_TOKEN:-}"
+if [ -z "$agent_token" ] && [ -z "${GITHUB_TRACKER_TOKEN:-}" ]; then
+  agent_token="${GITHUB_TOKEN:-}"
+fi
+
+if [ -n "$agent_token" ]; then
+  git config --global url."https://x-access-token:${agent_token}@github.com/".insteadOf "https://github.com/"
 fi
 
 if [ -d /run/host-codex ]; then

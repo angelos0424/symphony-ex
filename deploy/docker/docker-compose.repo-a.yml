@@ -11,6 +11,7 @@ services:
     env_file:
       - ./env/common.env
       - ./env/repo-a.env
+    # common.env supplies separate tracker and agent credentials.
     environment:
       SYMPHONY_WORKFLOW_PATH: /app/workflows/repo-a.WORKFLOW.md
       SYMPHONY_DASHBOARD_ENABLED: "false"

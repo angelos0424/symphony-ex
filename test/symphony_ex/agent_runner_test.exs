@@ -5,6 +5,20 @@ defmodule SymphonyEx.AgentRunnerTest do
   alias SymphonyEx.Domain.{Events, Issue}
   alias SymphonyEx.SessionStore
 
+  setup do
+    previous_agent_token = System.get_env("GITHUB_AGENT_TOKEN")
+    System.put_env("GITHUB_AGENT_TOKEN", "agent-test-token")
+
+    on_exit(fn ->
+      case previous_agent_token do
+        nil -> System.delete_env("GITHUB_AGENT_TOKEN")
+        value -> System.put_env("GITHUB_AGENT_TOKEN", value)
+      end
+    end)
+
+    :ok
+  end
+
   defmodule MockAppServer do
     use Agent
 
@@ -171,6 +185,10 @@ defmodule SymphonyEx.AgentRunnerTest do
         send(pid, message)
       end
     end
+  end
+
+  defmodule NeverStartAppServer do
+    def start_link(_opts), do: raise("Codex app-server must not start")
   end
 
   defmodule SessionLogAppServer do
@@ -673,6 +691,45 @@ defmodule SymphonyEx.AgentRunnerTest do
     assert is_list(turn_params["input"])
     assert [%{"type" => "text", "text" => _prompt}] = turn_params["input"]
     assert turn_params["sandboxPolicy"] == %{"type" => "dangerFullAccess"}
+
+    assert env = opts[:env]
+    env_map = Map.new(env, fn {key, value} -> {to_string(key), to_string(value)} end)
+    assert env_map["GITHUB_TOKEN"] == "agent-test-token"
+    assert env_map["GITHUB_AGENT_TOKEN"] == "agent-test-token"
+    assert env_map["GITHUB_TRACKER_TOKEN"] == "false"
+    assert env_map["SYMPHONY_DASHBOARD_SECRET_KEY_BASE"] == "false"
+  end
+
+  test "fails before starting Codex when the agent token is missing" do
+    previous_agent_token = System.get_env("GITHUB_AGENT_TOKEN")
+    previous_tracker_token = System.get_env("GITHUB_TRACKER_TOKEN")
+    previous_legacy_token = System.get_env("GITHUB_TOKEN")
+
+    System.delete_env("GITHUB_AGENT_TOKEN")
+    System.put_env("GITHUB_TRACKER_TOKEN", "tracker-test-token")
+    System.delete_env("GITHUB_TOKEN")
+
+    on_exit(fn ->
+      restore_env("GITHUB_AGENT_TOKEN", previous_agent_token)
+      restore_env("GITHUB_TRACKER_TOKEN", previous_tracker_token)
+      restore_env("GITHUB_TOKEN", previous_legacy_token)
+    end)
+
+    workspace_path = tmp_workspace("missing-agent-token")
+    workflow_path = write_workflow(workspace_path)
+    issue = issue_fixture("SYM-MISSING-AGENT-TOKEN")
+
+    result =
+      AgentRunner.run(issue,
+        workspace_path: workspace_path,
+        workflow_path: workflow_path,
+        codex: [command: "mock-codex"],
+        app_server: NeverStartAppServer
+      )
+
+    assert result.status == :failed
+    assert result.error_category == "missing_agent_token"
+    assert result.error =~ "GITHUB_AGENT_TOKEN"
   end
 
   test "adds native Codex skill input items for referenced gstack skills" do
@@ -1281,10 +1338,14 @@ defmodule SymphonyEx.AgentRunnerTest do
   end
 
   defp tmp_workspace(name) do
-    Path.join(
-      System.tmp_dir!(),
-      "symphony-agent-runner-#{name}-#{System.unique_integer([:positive])}"
-    )
+    path =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-agent-runner-#{name}-#{System.unique_integer([:positive])}"
+      )
+
+    File.rm_rf!(path)
+    path
   end
 
   defp read_events!(workspace_path) do
@@ -1294,4 +1355,7 @@ defmodule SymphonyEx.AgentRunnerTest do
     |> String.split("\n", trim: true)
     |> Enum.map(&Jason.decode!/1)
   end
+
+  defp restore_env(key, nil), do: System.delete_env(key)
+  defp restore_env(key, value), do: System.put_env(key, value)
 end

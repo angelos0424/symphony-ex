@@ -99,11 +99,13 @@ git worktree prune --dry-run
 
 현재 활성 작업:
 
-- `PR-1B / TRUST-03` — **Picked Up**
+- `PR-1B / TRUST-03` — **Review**
 - Issue: [#36](https://github.com/angelos0424/symphony-ex/issues/36)
 - Branch: `fix/issue-36-trust-03-credentials`
 - Objective: agent와 tracker/orchestrator 자격증명을 분리하고 Codex subprocess 환경을 최소화
-- 다음 gate: RED 테스트 작성 및 기존 credential 전달 경로 검증
+- 구현/로컬 검증: 완료
+- validation: focused `55 tests/0 failures`, full `234 tests/0 failures`, format PASS, Entrypoint `sh -n` PASS, Compose 3종 `config --quiet` PASS
+- 다음 gate: 동일 immutable SHA 기준 spec compliance 및 quality/security review
 
 ## 3. 설계 원칙
 

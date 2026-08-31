@@ -794,8 +794,10 @@ defmodule SymphonyEx.GitHub.Client do
   @spec request(atom(), String.t(), keyword(), keyword()) :: {:ok, term()} | {:error, term()}
   defp request(method, url, opts, request_opts) do
     request_fun = Keyword.get(opts, :request_fun, &Req.request/1)
-    api_key = Keyword.fetch!(opts, :api_key)
-    headers = Keyword.get(request_opts, :headers, []) ++ [{"authorization", "Bearer #{api_key}"}]
+    tracker_token = Keyword.get(opts, :tracker_token) || Keyword.fetch!(opts, :api_key)
+
+    headers =
+      Keyword.get(request_opts, :headers, []) ++ [{"authorization", "Bearer #{tracker_token}"}]
 
     request =
       Req.new(

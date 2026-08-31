@@ -30,7 +30,8 @@ Each repo has independent worktree/source-cache volumes. Compose files remain re
 ## Operating defaults
 
 - dashboard disabled
-- GitHub API auth via `GITHUB_TOKEN`
+- GitHub API and Project write-back via `GITHUB_TRACKER_TOKEN`
+- Codex clone/push/PR auth via `GITHUB_AGENT_TOKEN`
 - HTTPS source URL with token-based git transport
 - repo-c: `poll-interval-ms: 300000`, `max-concurrent: 1`, `max-retries: 0`
 
@@ -45,7 +46,11 @@ cp env/repo-b.env.example env/repo-b.env
 cp env/repo-c.env.example env/repo-c.env
 ```
 
-Set `GITHUB_TOKEN` in ignored `env/common.env`. Host Codex state is mounted read-only and copied into the runtime home by the entrypoint.
+Set `GITHUB_TRACKER_TOKEN` and the repo-scoped `GITHUB_AGENT_TOKEN` in ignored
+`env/common.env`. The entrypoint uses only the agent token for Git URL
+rewrites, while the tracker token remains in the orchestrator process and is
+never included in the Codex environment. `GITHUB_TOKEN` is retained only as a
+warning-producing one-release compatibility alias.
 
 ## Validate
 

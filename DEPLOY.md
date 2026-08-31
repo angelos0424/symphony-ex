@@ -13,7 +13,9 @@
 
 | 변수 | 설명 | 예시 |
 |------|------|------|
-| `GITHUB_TOKEN` | GitHub Personal Access Token (`repo`, `project` 권한) | `ghp_xxx` |
+| `GITHUB_TRACKER_TOKEN` | Orchestrator용 GitHub Issue/Project Personal Access Token | `ghp_tracker_xxx` |
+| `GITHUB_AGENT_TOKEN` | Codex용 repo-scoped clone/push/PR Personal Access Token | `ghp_agent_xxx` |
+| `GITHUB_TOKEN` | Deprecated one-release alias for both tokens | (legacy only) |
 | `GITHUB_OWNER` | GitHub 조직/사용자명 | `openai` |
 | `GITHUB_REPO` | 대상 저장소명 | `symphony` |
 | `WORKSPACE_ROOT` | 워크스페이스 루트 디렉토리 | `/opt/symphony/worktrees` |
@@ -93,7 +95,8 @@ services:
       - worktrees:/opt/symphony/worktrees
       - source-cache:/opt/symphony/source-cache
     environment:
-      - GITHUB_TOKEN=${GITHUB_TOKEN}
+      - GITHUB_TRACKER_TOKEN=${GITHUB_TRACKER_TOKEN}
+      - GITHUB_AGENT_TOKEN=${GITHUB_AGENT_TOKEN}
       - GITHUB_OWNER=${GITHUB_OWNER}
       - GITHUB_REPO=${GITHUB_REPO}
       - GITHUB_PROJECT_NUMBER=${GITHUB_PROJECT_NUMBER:-}
@@ -142,8 +145,8 @@ volumes:
 - `poll-interval-ms: 60000`
 - `max-concurrent: 1`
 - dashboard disabled
-- GitHub API auth는 `GITHUB_TOKEN`
-- git clone/fetch auth는 SSH (`git@github.com:...`)
+- GitHub API와 Issue/Project write-back은 `GITHUB_TRACKER_TOKEN`
+- Codex clone/push/PR auth는 `GITHUB_AGENT_TOKEN`
 
 이 starter는 Intel N100 같은 소형 호스트에서도 무리하지 않도록 보수적인 값으로 맞춰져 있습니다.
 
@@ -189,7 +192,8 @@ sudo chown -R symphony:symphony /opt/symphony/worktrees /opt/symphony/source-cac
 
 # 4. 환경변수 파일 생성
 sudo cat > /opt/symphony-ex/.env << 'EOF'
-GITHUB_TOKEN=ghp_xxx
+GITHUB_TRACKER_TOKEN=ghp_tracker_xxx
+GITHUB_AGENT_TOKEN=ghp_agent_xxx
 GITHUB_OWNER=my-org
 GITHUB_REPO=my-repo
 WORKSPACE_ROOT=/opt/symphony/worktrees

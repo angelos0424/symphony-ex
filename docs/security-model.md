@@ -59,12 +59,24 @@ Before unattended operation, run a dry run and verify:
 - explicit Issue execution cannot bypass the policy;
 - the gating reason is visible without exposing tokens or private auth files.
 
+## Credential boundary
+
+`GITHUB_TRACKER_TOKEN` is kept in the orchestrator/tracker process for GitHub
+Issue and Project reads plus lifecycle write-back. `GITHUB_AGENT_TOKEN` is a
+repo-scoped credential passed to Codex for clone, push, and pull-request work.
+The Codex Port receives an explicit allowlisted environment; it does not
+inherit the tracker token or `SYMPHONY_DASHBOARD_SECRET_KEY_BASE`. The legacy
+`GITHUB_TOKEN` is accepted for one release with a deprecation warning and is
+treated as both roles only when the split variables are not configured.
+
+If `GITHUB_AGENT_TOKEN` is absent after migration, polling and observation may
+continue, but dispatch fails before the Codex app-server starts.
+
 ## Out of scope
 
 This policy does not replace:
 
 - dashboard/API authentication;
-- separation of tracker and agent credentials;
 - Codex sandbox restrictions;
 - container non-root hardening;
 - GitHub Project permission administration.

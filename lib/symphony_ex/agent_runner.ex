@@ -40,11 +40,27 @@ defmodule SymphonyEx.AgentRunner do
           elapsed_ms: non_neg_integer() | nil
         }
 
+  @type run_context :: %{
+          workspace_path: Path.t(),
+          workflow_path: String.t(),
+          workflow_store: term(),
+          app_server: module(),
+          codex_config: keyword(),
+          tracker_opts: keyword(),
+          comments: [map()],
+          context_docs: String.t(),
+          command: String.t(),
+          turn_timeout: pos_integer(),
+          stall_timeout: pos_integer(),
+          recovered_session: SessionStore.session_data() | nil
+        }
+
   @spec run(Issue.t(), keyword()) :: run_result()
   def run(issue, opts) do
     workspace_path = Keyword.fetch!(opts, :workspace_path)
     workflow_path = Keyword.fetch!(opts, :workflow_path)
     codex_config = Keyword.fetch!(opts, :codex)
+    tracker_opts = Keyword.get(opts, :tracker_opts, [])
     comments = Keyword.get(opts, :comments, [])
     context_docs = Keyword.get(opts, :context_docs, "")
     app_server = Keyword.get(opts, :app_server, AppServer)
@@ -74,38 +90,67 @@ defmodule SymphonyEx.AgentRunner do
             workspace_path: workspace_path
           })
 
-        case PromptBuilder.build_payload(workflow_path, issue,
-               comments: comments,
-               context_docs: context_docs,
-               workflow_store: Keyword.get(opts, :workflow_store, SymphonyEx.WorkflowStore),
-               workspace_path: workspace_path
-             ) do
-          {:ok, %{prompt: prompt, external_references: external_references}} ->
-            {:ok, server} = app_server.start_link(command: command, cwd: workspace_path)
-            app_server.subscribe(server)
+        run_context = %{
+          workspace_path: workspace_path,
+          workflow_path: workflow_path,
+          workflow_store: Keyword.get(opts, :workflow_store, SymphonyEx.WorkflowStore),
+          app_server: app_server,
+          codex_config: codex_config,
+          tracker_opts: tracker_opts,
+          comments: comments,
+          context_docs: context_docs,
+          command: command,
+          turn_timeout: turn_timeout,
+          stall_timeout: stall_timeout,
+          recovered_session: recovered_session
+        }
 
-            try do
-              run_session(
-                app_server,
-                server,
-                prompt,
-                external_references,
-                issue,
-                workspace_path,
-                codex_config,
-                turn_timeout,
-                stall_timeout,
-                recovered_session
-              )
-            after
-              app_server.shutdown(server)
-            end
+        case resolve_agent_token(codex_config) do
+          nil ->
+            build_prestart_failure(issue, workspace_path, recovered_session, :missing_agent_token)
 
-          {:error, reason} ->
-            build_prestart_failure(issue, workspace_path, recovered_session, reason)
+          agent_token ->
+            run_with_agent_token(issue, run_context, agent_token)
         end
       end
     )
+  end
+
+  @spec run_with_agent_token(Issue.t(), run_context(), String.t()) :: run_result()
+  defp run_with_agent_token(issue, context, agent_token) do
+    case PromptBuilder.build_payload(context.workflow_path, issue,
+           comments: context.comments,
+           context_docs: context.context_docs,
+           workflow_store: context.workflow_store,
+           workspace_path: context.workspace_path
+         ) do
+      {:ok, %{prompt: prompt, external_references: external_references}} ->
+        {:ok, server} =
+          context.app_server.start_link(
+            command: context.command,
+            cwd: context.workspace_path,
+            env: codex_environment(agent_token)
+          )
+
+        context.app_server.subscribe(server)
+
+        try do
+          run_session(
+            context.app_server,
+            server,
+            prompt,
+            external_references,
+            issue,
+            context.workspace_path,
+            context
+          )
+        after
+          context.app_server.shutdown(server)
+        end
+
+      {:error, reason} ->
+        build_prestart_failure(issue, context.workspace_path, context.recovered_session, reason)
+    end
   end
 
   @spec run_session(
@@ -115,10 +160,7 @@ defmodule SymphonyEx.AgentRunner do
           [PromptBuilder.external_reference()],
           Issue.t(),
           Path.t(),
-          keyword(),
-          pos_integer(),
-          pos_integer(),
-          SessionStore.session_data() | nil
+          run_context()
         ) ::
           run_result()
   defp run_session(
@@ -128,11 +170,11 @@ defmodule SymphonyEx.AgentRunner do
          external_references,
          issue,
          workspace_path,
-         codex_config,
-         turn_timeout,
-         stall_timeout,
-         recovered_session
+         context
        ) do
+    codex_config = context.codex_config
+    recovered_session = context.recovered_session
+
     with {:ok, _init_result} <- app_server.initialize(server),
          capabilities = app_server.capabilities(server),
          {:ok, thread_result} <-
@@ -184,8 +226,7 @@ defmodule SymphonyEx.AgentRunner do
         workspace_path,
         thread_id,
         session,
-        turn_timeout,
-        stall_timeout
+        context
       )
     else
       {:error, error} ->
@@ -239,6 +280,7 @@ defmodule SymphonyEx.AgentRunner do
           workspace_path: Path.t(),
           thread_id: String.t() | nil,
           session: SessionStore.session_data(),
+          tracker_opts: keyword(),
           deadline: integer(),
           stall_timeout: pos_integer()
         }
@@ -250,8 +292,7 @@ defmodule SymphonyEx.AgentRunner do
           Path.t(),
           String.t() | nil,
           SessionStore.session_data(),
-          pos_integer(),
-          pos_integer()
+          run_context()
         ) :: run_result()
   defp wait_for_completion(
          app_server,
@@ -260,9 +301,12 @@ defmodule SymphonyEx.AgentRunner do
          workspace_path,
          thread_id,
          session,
-         turn_timeout,
-         stall_timeout
+         context
        ) do
+    tracker_opts = context.tracker_opts
+    turn_timeout = context.turn_timeout
+    stall_timeout = context.stall_timeout
+
     ctx = %{
       app_server: app_server,
       server: server,
@@ -270,6 +314,7 @@ defmodule SymphonyEx.AgentRunner do
       workspace_path: workspace_path,
       thread_id: thread_id,
       session: session,
+      tracker_opts: tracker_opts,
       deadline: System.monotonic_time(:millisecond) + turn_timeout,
       stall_timeout: stall_timeout
     }
@@ -395,7 +440,7 @@ defmodule SymphonyEx.AgentRunner do
         last_event: last_event,
         elapsed_ms: elapsed_ms
       }
-      |> validate_success_result(thread_events, ctx.issue, ctx.workspace_path)
+      |> validate_success_result(thread_events, ctx.issue, ctx.workspace_path, ctx.tracker_opts)
 
     persist_terminal_session(
       ctx.workspace_path,
@@ -504,6 +549,10 @@ defmodule SymphonyEx.AgentRunner do
   end
 
   @spec classify_prestart_failure(term()) :: {String.t(), String.t()}
+  defp classify_prestart_failure(:missing_agent_token) do
+    {"GITHUB_AGENT_TOKEN is required before starting the Codex app-server", "missing_agent_token"}
+  end
+
   defp classify_prestart_failure({:missing_skill_reference, name, paths}) do
     expected = Enum.map_join(paths, ", ", &to_string/1)
 
@@ -580,8 +629,20 @@ defmodule SymphonyEx.AgentRunner do
     end)
   end
 
-  @spec validate_success_result(run_result(), [Events.t()], Issue.t(), Path.t()) :: run_result()
-  defp validate_success_result(%{status: :success} = result, events, issue, workspace_path) do
+  @spec validate_success_result(
+          run_result(),
+          [Events.t()],
+          Issue.t(),
+          Path.t(),
+          keyword()
+        ) :: run_result()
+  defp validate_success_result(
+         %{status: :success} = result,
+         events,
+         issue,
+         workspace_path,
+         tracker_opts
+       ) do
     case transient_failure_message(result, events) do
       {:failed, message, category} ->
         %{
@@ -604,8 +665,8 @@ defmodule SymphonyEx.AgentRunner do
             }
 
           nil ->
-            with :ok <- verify_required_pr(issue, workspace_path),
-                 :ok <- verify_required_outputs(issue),
+            with :ok <- verify_required_pr(issue, workspace_path, tracker_opts),
+                 :ok <- verify_required_outputs(issue, tracker_opts),
                  thread_log_path when is_binary(thread_log_path) <-
                    extract_thread_log_path(events),
                  turn_id when is_binary(turn_id) <- result.turn_id,
@@ -635,7 +696,8 @@ defmodule SymphonyEx.AgentRunner do
     end
   end
 
-  defp validate_success_result(result, _events, _issue, _workspace_path), do: result
+  defp validate_success_result(result, _events, _issue, _workspace_path, _tracker_opts),
+    do: result
 
   @runtime_artifact_paths [
     ".agents",
@@ -644,8 +706,9 @@ defmodule SymphonyEx.AgentRunner do
     ".symphony-run-events.ndjson"
   ]
 
-  @spec verify_required_pr(Issue.t(), Path.t()) :: :ok | {:error, String.t(), String.t()}
-  defp verify_required_pr(%Issue{} = issue, workspace_path) do
+  @spec verify_required_pr(Issue.t(), Path.t(), keyword()) ::
+          :ok | {:error, String.t(), String.t()}
+  defp verify_required_pr(%Issue{} = issue, workspace_path, tracker_opts) do
     case material_workspace_changes(workspace_path) do
       {:ok, :clean} ->
         :ok
@@ -657,7 +720,7 @@ defmodule SymphonyEx.AgentRunner do
 
       {:ok, {:committed, head_sha}} ->
         issue
-        |> fetch_issue_prs()
+        |> fetch_issue_prs(tracker_opts)
         |> verify_related_pr_contains_head(issue, head_sha)
 
       {:error, :not_a_git_repository} ->
@@ -842,10 +905,10 @@ defmodule SymphonyEx.AgentRunner do
     end
   end
 
-  @spec verify_required_outputs(Issue.t()) :: :ok | {:error, String.t(), String.t()}
-  defp verify_required_outputs(%Issue{} = issue) do
+  @spec verify_required_outputs(Issue.t(), keyword()) :: :ok | {:error, String.t(), String.t()}
+  defp verify_required_outputs(%Issue{} = issue, tracker_opts) do
     if issue_requires_body_update?(issue) do
-      case issue_body_updated_or_pr_created?(issue) do
+      case issue_body_updated_or_pr_created?(issue, tracker_opts) do
         {:ok, true} ->
           :ok
 
@@ -871,17 +934,24 @@ defmodule SymphonyEx.AgentRunner do
 
   defp issue_requires_body_update?(_issue), do: false
 
-  @spec issue_body_updated_or_pr_created?(Issue.t()) :: {:ok, boolean()} | {:error, term()}
-  defp issue_body_updated_or_pr_created?(%Issue{} = issue) do
+  @spec issue_body_updated_or_pr_created?(Issue.t(), keyword()) ::
+          {:ok, boolean()} | {:error, term()}
+  defp issue_body_updated_or_pr_created?(%Issue{} = issue, tracker_opts) do
     fetcher =
       Application.get_env(
         :symphony_ex,
         :agent_runner_issue_body_fetcher,
-        &default_fetch_issue_body/1
+        &default_fetch_issue_body/2
       )
 
-    with {:ok, latest_body} <- fetcher.(issue),
-         {:ok, prs} <- fetch_issue_prs(issue) do
+    latest_body_result =
+      case :erlang.fun_info(fetcher, :arity) do
+        {:arity, 2} -> fetcher.(issue, tracker_opts)
+        {:arity, 1} -> fetcher.(issue)
+      end
+
+    with {:ok, latest_body} <- latest_body_result,
+         {:ok, prs} <- fetch_issue_prs(issue, tracker_opts) do
       body_updated =
         normalize_issue_body(latest_body) != normalize_issue_body(issue.description || "")
 
@@ -889,37 +959,41 @@ defmodule SymphonyEx.AgentRunner do
     end
   end
 
-  @spec default_fetch_issue_body(Issue.t()) :: {:ok, String.t()} | {:error, term()}
-  defp default_fetch_issue_body(%Issue{} = issue) do
-    case Client.fetch_issue(issue.identifier, github_client_opts()) do
+  @spec default_fetch_issue_body(Issue.t(), keyword()) :: {:ok, String.t()} | {:error, term()}
+  defp default_fetch_issue_body(%Issue{} = issue, tracker_opts) do
+    case Client.fetch_issue(issue.identifier, github_client_opts(tracker_opts)) do
       {:ok, %{} = latest_issue} -> {:ok, latest_issue["body"] || ""}
       {:ok, nil} -> {:error, :issue_not_found}
       {:error, reason} -> {:error, reason}
     end
   end
 
-  @spec fetch_issue_prs(Issue.t()) :: {:ok, [map()]} | {:error, term()}
-  defp fetch_issue_prs(%Issue{} = issue) do
+  @spec fetch_issue_prs(Issue.t(), keyword()) :: {:ok, [map()]} | {:error, term()}
+  defp fetch_issue_prs(%Issue{} = issue, tracker_opts) do
     fetcher =
       Application.get_env(
         :symphony_ex,
         :agent_runner_issue_pr_fetcher,
-        &default_fetch_issue_prs/1
+        &default_fetch_issue_prs/2
       )
 
-    fetcher.(issue)
+    case :erlang.fun_info(fetcher, :arity) do
+      {:arity, 2} -> fetcher.(issue, tracker_opts)
+      {:arity, 1} -> fetcher.(issue)
+    end
   end
 
-  @spec default_fetch_issue_prs(Issue.t()) :: {:ok, [map()]} | {:error, term()}
-  defp default_fetch_issue_prs(%Issue{target_pr: target_pr}) when is_integer(target_pr) do
-    case Client.fetch_pull_request(target_pr, github_client_opts()) do
+  @spec default_fetch_issue_prs(Issue.t(), keyword()) :: {:ok, [map()]} | {:error, term()}
+  defp default_fetch_issue_prs(%Issue{target_pr: target_pr}, tracker_opts)
+       when is_integer(target_pr) do
+    case Client.fetch_pull_request(target_pr, github_client_opts(tracker_opts)) do
       {:ok, pr} -> {:ok, [pr]}
       {:error, reason} -> {:error, reason}
     end
   end
 
-  defp default_fetch_issue_prs(%Issue{}) do
-    Client.list_pull_requests(github_client_opts())
+  defp default_fetch_issue_prs(%Issue{}, tracker_opts) do
+    Client.list_pull_requests(github_client_opts(tracker_opts))
   end
 
   @spec pr_exists_for_issue(Issue.t(), [map()]) :: boolean()
@@ -970,13 +1044,31 @@ defmodule SymphonyEx.AgentRunner do
     get_in(pr, ["head", "sha"]) || pr["headRefOid"] || pr["head_sha"]
   end
 
-  @spec github_client_opts() :: keyword()
-  defp github_client_opts do
+  @spec github_client_opts(keyword()) :: keyword()
+  defp github_client_opts(tracker_opts) do
     [
-      api_key: System.get_env("GITHUB_TOKEN"),
-      owner: System.get_env("GITHUB_OWNER"),
-      repo: System.get_env("GITHUB_REPO")
+      api_key: Keyword.get(tracker_opts, :api_key) || tracker_token_from_env(),
+      owner: Keyword.get(tracker_opts, :owner) || present_env("GITHUB_OWNER"),
+      repo: Keyword.get(tracker_opts, :repo) || present_env("GITHUB_REPO"),
+      endpoint: Keyword.get(tracker_opts, :endpoint),
+      graphql_endpoint: Keyword.get(tracker_opts, :graphql_endpoint)
     ]
+    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+  end
+
+  @spec tracker_token_from_env() :: String.t() | nil
+  defp tracker_token_from_env do
+    present_env("GITHUB_TRACKER_TOKEN") ||
+      if is_nil(present_env("GITHUB_TRACKER_TOKEN")), do: present_env("GITHUB_TOKEN"), else: nil
+  end
+
+  @spec present_env(String.t()) :: String.t() | nil
+  defp present_env(name) do
+    case System.get_env(name) do
+      nil -> nil
+      "" -> nil
+      value -> value
+    end
   end
 
   @spec normalize_issue_body(String.t()) :: String.t()
@@ -1060,6 +1152,50 @@ defmodule SymphonyEx.AgentRunner do
     else
       _ -> nil
     end
+  end
+
+  @codex_environment_keys ["PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "CODEX_HOME"]
+
+  @spec resolve_agent_token(keyword()) :: String.t() | nil
+  defp resolve_agent_token(codex_config) do
+    normalize_token(Keyword.get(codex_config, :agent_token)) ||
+      present_env("GITHUB_AGENT_TOKEN") || legacy_agent_token_from_env()
+  end
+
+  @spec legacy_agent_token_from_env() :: String.t() | nil
+  defp legacy_agent_token_from_env do
+    if is_nil(present_env("GITHUB_TRACKER_TOKEN")),
+      do: present_env("GITHUB_TOKEN"),
+      else: nil
+  end
+
+  @spec normalize_token(term()) :: String.t() | nil
+  defp normalize_token(value) when is_binary(value) do
+    if String.trim(value) == "", do: nil, else: value
+  end
+
+  defp normalize_token(_value), do: nil
+
+  @spec codex_environment(String.t()) :: [{charlist(), charlist() | false}]
+  defp codex_environment(agent_token) do
+    inherited =
+      Enum.flat_map(@codex_environment_keys, fn name ->
+        case present_env(name) do
+          nil -> []
+          value -> [{String.to_charlist(name), String.to_charlist(value)}]
+        end
+      end)
+
+    inherited ++
+      [
+        {~c"TERM", ~c"dumb"},
+        {~c"GITHUB_TOKEN", String.to_charlist(agent_token)},
+        {~c"GITHUB_AGENT_TOKEN", String.to_charlist(agent_token)},
+        {~c"GH_TOKEN", String.to_charlist(agent_token)},
+        {~c"GITHUB_TRACKER_TOKEN", false},
+        {~c"SYMPHONY_DASHBOARD_SECRET_KEY_BASE", false},
+        {~c"GIT_TERMINAL_PROMPT", ~c"0"}
+      ]
   end
 
   @spec thread_start_params(SessionStore.session_data() | nil, String.t(), keyword()) :: map()
