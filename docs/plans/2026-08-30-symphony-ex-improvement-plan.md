@@ -77,13 +77,13 @@ git worktree prune --dry-run
 
 현재 활성 작업:
 
-- `PR-1A / TRUST-01·02` — **Done**
-- Issue: [#32](https://github.com/angelos0424/symphony-ex/issues/32)
+- `PR-0 / SEC-01·02·03` — **Done**
+- Issue: [#38](https://github.com/angelos0424/symphony-ex/issues/38)
+- PR: [#39](https://github.com/angelos0424/symphony-ex/pull/39)
 - 구현/리뷰/merge: 완료
-- PR: [#33](https://github.com/angelos0424/symphony-ex/pull/33)
-- merge commit: `0ddbc0558d31392d18279c9b596f7a6820b90cf4`
-- main 검증: `0ddbc0558d31392d18279c9b596f7a6820b90cf4`에서 format PASS, focused `67 tests/0 failures`, full `225 tests/0 failures`; GitHub Actions workflow 없음
-- 다음 정확한 작업: `PR-1B / TRUST-03`을 새 GitHub Issue로 등록하고, Issue 기준 branch에서만 pick/구현 시작
+- merge commit: `b31dfe93389545fd7914b2f0acd2c56300f9c42d`
+- main 검증: `b31dfe93389545fd7914b2f0acd2c56300f9c42d`에서 focused `43 tests/0 failures`, full `243 tests/0 failures`, format/shell/Compose PASS; GitHub Actions workflow 없음
+- 다음 정확한 작업: `PR-1C / TRUST-04`을 새 GitHub Issue로 등록하고, Issue 기준 branch에서만 pick/구현 시작
 
 그 외 구현 Task는 `Todo`이며, 각 Task는 Issue와 branch를 만든 뒤 순차적으로 pick한다.
 
@@ -104,15 +104,11 @@ git worktree prune --dry-run
 - merge commit: `16d16b419d42b5eaddac36ce1ac64d5f1d57887b`
 - main 검증: `16d16b419d42b5eaddac36ce1ac64d5f1d57887b`에서 format PASS, full `234 tests/0 failures`; GitHub Actions workflow 없음
 
-현재 활성 작업:
+현재 다음 작업:
 
-- `PR-0 / SEC-01·02·03` — **Review**
-- Issue: [#38](https://github.com/angelos0424/symphony-ex/issues/38)
-- Branch: `fix/issue-38-pr0-dashboard-security`
-- Objective: Dashboard/API를 인증된 read-only observer로 만들고 runtime control을 명시적으로 분리
-- 구현/로컬 검증: 완료
-- validation: focused `43 tests/0 failures`, full `243 tests/0 failures`, format PASS, Credo `55 baseline findings/no new PR-0 finding`; Compose는 parent ignored env에서 검증 예정
-- 다음 gate: parent cherry-pick 후 Compose gate와 immutable spec/quality review
+- `PR-1C / TRUST-04` — **Todo**
+- Objective: non-root container·sandbox·health migration
+- 다음 action: GitHub Issue 등록 후 Issue 기준 branch에서 구현 시작
 
 ## 3. 설계 원칙
 
@@ -148,9 +144,9 @@ git worktree prune --dry-run
 
 | ID | 상태 | PR | Task | 주요 파일 |
 |---|---|---:|---|---|
-| SEC-01 | Review | PR-0 | Dashboard read-only/control 분리 | `config/schema.ex`, `dashboard_live.ex` |
-| SEC-02 | Review | PR-0 | Dashboard/API 인증 및 non-loopback fail-closed | `router.ex`, 새 auth plug, `symphony_ex.ex` |
-| SEC-03 | Review | PR-0 | `check_origin`·배포 예시 강화 | `symphony_ex.ex`, `DEPLOY.md` |
+| SEC-01 | Done | PR-0 | Dashboard read-only/control 분리 | `config/schema.ex`, `dashboard_live.ex` |
+| SEC-02 | Done | PR-0 | Dashboard/API 인증 및 non-loopback fail-closed | `router.ex`, 새 auth plug, `symphony_ex.ex` |
+| SEC-03 | Done | PR-0 | `check_origin`·배포 예시 강화 | `symphony_ex.ex`, `DEPLOY.md` |
 | TRUST-01 | Done | PR-1A | Issue author/association domain 필드 | `domain/issue.ex`, `github/adapter.ex` |
 | TRUST-02 | Done | PR-1A | Trusted association/actor gate | `automation.ex`, `config/schema.ex`, `orchestrator.ex` |
 | TRUST-01-FU | Done | PR-1A-FU | lifecycle-comments 비활성 시 gated record write-back | `github/adapter.ex`, adapter tests |
