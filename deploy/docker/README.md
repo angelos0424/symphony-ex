@@ -47,10 +47,11 @@ cp env/repo-c.env.example env/repo-c.env
 ```
 
 Set `GITHUB_TRACKER_TOKEN` and the repo-scoped `GITHUB_AGENT_TOKEN` in ignored
-`env/common.env`. The entrypoint uses only the agent token for Git URL
-rewrites, while the tracker token remains in the orchestrator process and is
-never included in the Codex environment. `GITHUB_TOKEN` is retained only as a
-warning-producing one-release compatibility alias.
+`env/common.env`. The entrypoint resolves only the agent token at Git
+credential-helper runtime; it does not persist a token-bearing URL rewrite.
+The tracker token remains in the orchestrator process and is never included in
+the Codex environment. `GITHUB_TOKEN` is retained only as a warning-producing
+one-release compatibility alias.
 
 ## Validate
 

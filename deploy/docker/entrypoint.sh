@@ -7,7 +7,25 @@ if [ -z "$agent_token" ] && [ -z "${GITHUB_TRACKER_TOKEN:-}" ]; then
 fi
 
 if [ -n "$agent_token" ]; then
-  git config --global url."https://x-access-token:${agent_token}@github.com/".insteadOf "https://github.com/"
+  # Remove URL rewrites from older images without exposing their token value.
+  git config --global --unset-regexp \
+    '^url\.https://x-access-token:.*@github\.com/\.insteadOf$' 2>/dev/null || true
+  git config --global --unset-all credential.helper 2>/dev/null || true
+  # Resolve the token at credential-helper runtime, not while configuring Git.
+  git config --global credential.helper \
+    '!f() {
+      if [ "$1" = get ]; then
+        token="${GITHUB_AGENT_TOKEN:-}"
+        if [ -z "$token" ] && [ -z "${GITHUB_TRACKER_TOKEN:-}" ]; then
+          token="${GITHUB_TOKEN:-}"
+        fi
+        printf "%s\\n" \
+          "protocol=https" \
+          "host=github.com" \
+          "username=x-access-token" \
+          "password=$token"
+      fi
+    }; f'
 fi
 
 if [ -d /run/host-codex ]; then

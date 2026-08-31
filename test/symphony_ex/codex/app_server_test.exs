@@ -60,7 +60,9 @@ defmodule SymphonyEx.Codex.AppServerTest do
 
     assert entrypoint =~ "GITHUB_AGENT_TOKEN"
     assert entrypoint =~ "GITHUB_TRACKER_TOKEN"
-    refute entrypoint =~ "url.\"https://x-access-token:${GITHUB_TOKEN}"
+    assert entrypoint =~ "credential.helper"
+    refute entrypoint =~ "url.\"https://x-access-token:"
+    assert entrypoint =~ "--unset-regexp"
     assert common_env =~ "GITHUB_TRACKER_TOKEN="
     assert common_env =~ "GITHUB_AGENT_TOKEN="
 
