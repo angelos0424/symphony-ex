@@ -110,6 +110,8 @@ defmodule SymphonyEx do
 
   @spec configure_dashboard(keyword()) :: :ok
   defp configure_dashboard(dashboard_opts) do
+    Application.put_env(:symphony_ex, :dashboard_config, dashboard_opts)
+
     if Keyword.get(dashboard_opts, :enabled, false) do
       host = Keyword.get(dashboard_opts, :host, "127.0.0.1")
       port = Keyword.get(dashboard_opts, :port, 4000)
@@ -123,7 +125,7 @@ defmodule SymphonyEx do
           server: true,
           pubsub_server: SymphonyEx.PubSub,
           live_view: [signing_salt: "dashboard-live-view"],
-          check_origin: false
+          check_origin: dashboard_check_origin(dashboard_opts, port)
         ]
         |> maybe_put_secret_key_base(Keyword.get(dashboard_opts, :secret_key_base))
 
@@ -133,6 +135,23 @@ defmodule SymphonyEx do
     end
 
     :ok
+  end
+
+  @spec dashboard_check_origin(keyword(), pos_integer()) :: [String.t()]
+  defp dashboard_check_origin(dashboard_opts, port) do
+    case Keyword.get(dashboard_opts, :allowed_origins, []) do
+      origins when is_list(origins) and origins != [] -> origins
+      _other -> loopback_origins(port)
+    end
+  end
+
+  @spec loopback_origins(pos_integer()) :: [String.t()]
+  defp loopback_origins(port) do
+    [
+      "http://127.0.0.1:#{port}",
+      "http://localhost:#{port}",
+      "http://[::1]:#{port}"
+    ]
   end
 
   @spec maybe_put_secret_key_base(keyword(), String.t() | nil) :: keyword()

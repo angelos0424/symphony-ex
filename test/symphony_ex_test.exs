@@ -75,6 +75,8 @@ defmodule SymphonyExTest do
 
       path = write_workflow!(workflow)
       previous = Application.get_env(:symphony_ex, SymphonyEx.Orchestrator)
+      previous_endpoint = Application.get_env(:symphony_ex, SymphonyExWeb.Endpoint)
+      previous_dashboard = Application.get_env(:symphony_ex, :dashboard_config)
 
       try do
         with_env([{"GITHUB_TOKEN", "ghs_test"}], fn ->
@@ -84,6 +86,70 @@ defmodule SymphonyExTest do
         end)
       after
         restore_app_env(previous)
+        restore_endpoint_env(previous_endpoint)
+        restore_dashboard_env(previous_dashboard)
+      end
+    end
+
+    test "configures loopback-safe and explicit dashboard origins" do
+      workflow = """
+      ---
+      tracker:
+        owner: openai
+        repo: symphony
+      workspace:
+        root: /tmp/worktrees
+        source-repo-path: /tmp/source
+      dashboard:
+        enabled: true
+        host: 127.0.0.1
+        port: 4310
+        secret-key-base: test-dashboard-secret-key-base
+      ---
+      """
+
+      path = write_workflow!(workflow)
+      previous_endpoint = Application.get_env(:symphony_ex, SymphonyExWeb.Endpoint)
+      previous_dashboard = Application.get_env(:symphony_ex, :dashboard_config)
+
+      try do
+        with_env([{"GITHUB_TOKEN", "ghs_test"}], fn ->
+          SymphonyEx.configure_from_workflow!(path)
+          endpoint = Application.get_env(:symphony_ex, SymphonyExWeb.Endpoint)
+
+          assert endpoint[:check_origin] == [
+                   "http://127.0.0.1:4310",
+                   "http://localhost:4310",
+                   "http://[::1]:4310"
+                 ]
+
+          assert Application.get_env(:symphony_ex, :dashboard_config)[:controls_enabled] == false
+        end)
+      after
+        restore_endpoint_env(previous_endpoint)
+        restore_dashboard_env(previous_dashboard)
+      end
+
+      explicit_workflow =
+        String.replace(
+          workflow,
+          "port: 4310",
+          "port: 4311\n  allowed-origins:\n    - https://dashboard.example"
+        )
+
+      explicit_path = write_workflow!(explicit_workflow)
+      previous_endpoint = Application.get_env(:symphony_ex, SymphonyExWeb.Endpoint)
+      previous_dashboard = Application.get_env(:symphony_ex, :dashboard_config)
+
+      try do
+        with_env([{"GITHUB_TOKEN", "ghs_test"}], fn ->
+          SymphonyEx.configure_from_workflow!(explicit_path)
+          endpoint = Application.get_env(:symphony_ex, SymphonyExWeb.Endpoint)
+          assert endpoint[:check_origin] == ["https://dashboard.example"]
+        end)
+      after
+        restore_endpoint_env(previous_endpoint)
+        restore_dashboard_env(previous_dashboard)
       end
     end
 
@@ -103,6 +169,8 @@ defmodule SymphonyExTest do
 
       path = write_workflow!(workflow)
       previous = Application.get_env(:symphony_ex, SymphonyEx.Orchestrator)
+      previous_endpoint = Application.get_env(:symphony_ex, SymphonyExWeb.Endpoint)
+      previous_dashboard = Application.get_env(:symphony_ex, :dashboard_config)
 
       try do
         Application.delete_env(:symphony_ex, SymphonyEx.Orchestrator)
@@ -121,6 +189,8 @@ defmodule SymphonyExTest do
         )
       after
         restore_app_env(previous)
+        restore_endpoint_env(previous_endpoint)
+        restore_dashboard_env(previous_dashboard)
       end
     end
   end
@@ -153,6 +223,15 @@ defmodule SymphonyExTest do
     "SYMPHONY_LOG_METADATA",
     "SYMPHONY_LOG_REDACT_KEYS",
     "SYMPHONY_LOG_MAX_METADATA_VALUE_LENGTH",
+    "SYMPHONY_DASHBOARD_ENABLED",
+    "SYMPHONY_DASHBOARD_PORT",
+    "SYMPHONY_DASHBOARD_HOST",
+    "SYMPHONY_DASHBOARD_CONTROLS_ENABLED",
+    "SYMPHONY_DASHBOARD_AUTH_MODE",
+    "SYMPHONY_DASHBOARD_USERNAME",
+    "SYMPHONY_DASHBOARD_PASSWORD",
+    "SYMPHONY_DASHBOARD_ALLOWED_ORIGINS",
+    "SYMPHONY_DASHBOARD_SECRET_KEY_BASE",
     "SYMPHONY_WORKFLOW_PATH",
     "WORKFLOW_PATH"
   ]
@@ -182,4 +261,14 @@ defmodule SymphonyExTest do
 
   defp restore_app_env(value),
     do: Application.put_env(:symphony_ex, SymphonyEx.Orchestrator, value)
+
+  defp restore_endpoint_env(nil), do: Application.delete_env(:symphony_ex, SymphonyExWeb.Endpoint)
+
+  defp restore_endpoint_env(value),
+    do: Application.put_env(:symphony_ex, SymphonyExWeb.Endpoint, value)
+
+  defp restore_dashboard_env(nil), do: Application.delete_env(:symphony_ex, :dashboard_config)
+
+  defp restore_dashboard_env(value),
+    do: Application.put_env(:symphony_ex, :dashboard_config, value)
 end

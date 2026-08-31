@@ -1,5 +1,5 @@
 defmodule SymphonyExWeb.ApiControllerTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
   import Plug.Conn
   import Plug.Test
 
@@ -24,6 +24,13 @@ defmodule SymphonyExWeb.ApiControllerTest do
   end
 
   setup do
+    put_dashboard_config(
+      enabled: true,
+      host: "127.0.0.1",
+      controls_enabled: false,
+      auth: []
+    )
+
     Observability.reset()
     Observability.record_rate_limit(:github, %{remaining: 128, limit: 5000, reset: "1775174400"})
 
@@ -166,6 +173,36 @@ defmodule SymphonyExWeb.ApiControllerTest do
     assert body["running_count"] == 1
   end
 
+  test "GET /api/v1/status requires configured dashboard authentication" do
+    put_dashboard_config(
+      enabled: true,
+      host: "127.0.0.1",
+      controls_enabled: false,
+      auth: [mode: :basic, username: "operator", password: "api-password-sentinel"]
+    )
+
+    unauthorized = conn(:get, "/api/v1/status") |> Router.call(Router.init([]))
+
+    assert unauthorized.status == 401
+
+    assert get_resp_header(unauthorized, "www-authenticate") == [
+             "Basic realm=\"Symphony Dashboard\""
+           ]
+
+    refute unauthorized.resp_body =~ "api-password-sentinel"
+
+    authorized =
+      conn(:get, "/api/v1/status")
+      |> put_req_header(
+        "authorization",
+        Plug.BasicAuth.encode_basic_auth("operator", "api-password-sentinel")
+      )
+      |> Router.call(Router.init([]))
+
+    assert authorized.status == 200
+    refute authorized.resp_body =~ "api-password-sentinel"
+  end
+
   test "GET /api/v1/issues returns running, retry, and completed lists" do
     conn = conn(:get, "/api/v1/issues") |> put_req_header("accept", "application/json")
     conn = Router.call(conn, Router.init([]))
@@ -266,5 +303,18 @@ defmodule SymphonyExWeb.ApiControllerTest do
   defp write_events!(workspace_path, entries) do
     body = Enum.map_join(entries, "\n", &Jason.encode!/1) <> "\n"
     File.write!(RunEventLogger.events_path(workspace_path), body)
+  end
+
+  defp put_dashboard_config(config) do
+    previous = Application.get_env(:symphony_ex, :dashboard_config)
+    Application.put_env(:symphony_ex, :dashboard_config, config)
+
+    on_exit(fn ->
+      if previous == nil do
+        Application.delete_env(:symphony_ex, :dashboard_config)
+      else
+        Application.put_env(:symphony_ex, :dashboard_config, previous)
+      end
+    end)
   end
 end

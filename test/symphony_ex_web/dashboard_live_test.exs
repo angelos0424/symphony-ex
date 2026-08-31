@@ -1,6 +1,7 @@
 defmodule SymphonyExWeb.DashboardLiveTest do
   use ExUnit.Case, async: false
 
+  import Plug.Conn
   import Phoenix.ConnTest
   import Phoenix.LiveViewTest
 
@@ -35,8 +36,19 @@ defmodule SymphonyExWeb.DashboardLiveTest do
       pubsub_server: SymphonyEx.PubSub,
       live_view: [signing_salt: "dashboard-tests"],
       secret_key_base: String.duplicate("a", 64),
-      check_origin: false,
+      check_origin: ["http://127.0.0.1:4000", "http://localhost:4000", "http://[::1]:4000"],
       server: false
+    )
+
+    previous_dashboard = Application.get_env(:symphony_ex, :dashboard_config)
+
+    Application.put_env(:symphony_ex, :dashboard_config,
+      enabled: true,
+      host: "127.0.0.1",
+      port: 4000,
+      controls_enabled: false,
+      auth: [],
+      allowed_origins: []
     )
 
     start_supervised!({Phoenix.PubSub, name: SymphonyEx.PubSub})
@@ -47,6 +59,12 @@ defmodule SymphonyExWeb.DashboardLiveTest do
         Application.delete_env(:symphony_ex, Endpoint)
       else
         Application.put_env(:symphony_ex, Endpoint, previous)
+      end
+
+      if previous_dashboard == nil do
+        Application.delete_env(:symphony_ex, :dashboard_config)
+      else
+        Application.put_env(:symphony_ex, :dashboard_config, previous_dashboard)
       end
     end)
 
@@ -239,9 +257,10 @@ defmodule SymphonyExWeb.DashboardLiveTest do
     assert html =~ "4321/5000"
     assert html =~ "Orchestrator settings"
     assert html =~ "Runtime controls"
-    assert html =~ "Save settings &amp; reload"
-    assert html =~ "Restart orchestrator"
-    assert html =~ "Restart dashboard endpoint"
+    assert html =~ "Runtime controls are disabled"
+    refute html =~ "Save settings &amp; reload"
+    refute html =~ "Restart orchestrator"
+    refute html =~ "Restart dashboard endpoint"
     assert html =~ "Recent tracker write-back"
     assert html =~ "SYM-1"
     assert html =~ "SYM-2"
@@ -254,6 +273,72 @@ defmodule SymphonyExWeb.DashboardLiveTest do
     assert html =~ "tool exploded"
     assert html =~ "NDJSON breadcrumb tail"
     assert html =~ "turn.completed"
+  end
+
+  test "requires dashboard authentication before browser and LiveView access", %{conn: conn} do
+    put_dashboard_config(
+      enabled: true,
+      host: "127.0.0.1",
+      controls_enabled: false,
+      auth: [mode: :basic, username: "operator", password: "live-password-sentinel"],
+      allowed_origins: []
+    )
+
+    unauthorized = get(conn, "/")
+
+    assert unauthorized.status == 401
+
+    assert get_resp_header(unauthorized, "www-authenticate") == [
+             "Basic realm=\"Symphony Dashboard\""
+           ]
+
+    refute unauthorized.resp_body =~ "live-password-sentinel"
+
+    authenticated_conn =
+      build_conn()
+      |> put_req_header(
+        "authorization",
+        Plug.BasicAuth.encode_basic_auth("operator", "live-password-sentinel")
+      )
+
+    {:ok, _view, html} = live(authenticated_conn, "/")
+    assert html =~ "Symphony runtime dashboard"
+    refute html =~ "live-password-sentinel"
+  end
+
+  test "renders runtime controls only when explicitly enabled", %{conn: conn} do
+    put_dashboard_config(
+      enabled: true,
+      host: "127.0.0.1",
+      controls_enabled: true,
+      auth: [],
+      allowed_origins: []
+    )
+
+    {:ok, _view, html} = live(conn, "/")
+
+    assert html =~ "Save settings &amp; reload"
+    assert html =~ "Restart orchestrator"
+    assert html =~ "Restart dashboard endpoint"
+  end
+
+  test "rejects runtime control events while controls are disabled", %{conn: conn} do
+    {:ok, view, html} = live(conn, "/")
+
+    refute html =~ "phx-submit=\"save_runtime_settings\""
+    refute html =~ "phx-value-component=\"orchestrator\""
+
+    assert render_click(view, "restart_component", %{"component" => "orchestrator"}) =~
+             "Runtime controls are disabled"
+
+    assert render_click(view, "save_runtime_settings", %{
+             "runtime" => %{
+               "poll_interval_ms" => "1",
+               "max_concurrent" => "1",
+               "max_retries" => "0",
+               "backoff_base_ms" => "1"
+             }
+           }) =~ "Runtime controls are disabled"
   end
 
   test "supports richer queue/search/class/result filtering via query params", %{conn: conn} do
@@ -466,5 +551,18 @@ defmodule SymphonyExWeb.DashboardLiveTest do
   defp write_events!(workspace_path, entries) do
     body = Enum.map_join(entries, "\n", &Jason.encode!/1) <> "\n"
     File.write!(RunEventLogger.events_path(workspace_path), body)
+  end
+
+  defp put_dashboard_config(config) do
+    previous = Application.get_env(:symphony_ex, :dashboard_config)
+    Application.put_env(:symphony_ex, :dashboard_config, config)
+
+    on_exit(fn ->
+      if previous == nil do
+        Application.delete_env(:symphony_ex, :dashboard_config)
+      else
+        Application.put_env(:symphony_ex, :dashboard_config, previous)
+      end
+    end)
   end
 end

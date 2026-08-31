@@ -97,15 +97,22 @@ git worktree prune --dry-run
 - merge commit: `d7a64c14352e48611a7fced969f3ab99587191e2`
 - main 검증: `d7a64c14352e48611a7fced969f3ab99587191e2`에서 format PASS, focused `60 tests/0 failures`, full `227 tests/0 failures`; GitHub Actions workflow 없음
 
+- `PR-1B / TRUST-03` — **Done**
+- Issue: [#36](https://github.com/angelos0424/symphony-ex/issues/36)
+- PR: [#37](https://github.com/angelos0424/symphony-ex/pull/37)
+- 구현/리뷰/merge: 완료
+- merge commit: `16d16b419d42b5eaddac36ce1ac64d5f1d57887b`
+- main 검증: `16d16b419d42b5eaddac36ce1ac64d5f1d57887b`에서 format PASS, full `234 tests/0 failures`; GitHub Actions workflow 없음
+
 현재 활성 작업:
 
-- `PR-1B / TRUST-03` — **Review**
-- Issue: [#36](https://github.com/angelos0424/symphony-ex/issues/36)
-- Branch: `fix/issue-36-trust-03-credentials`
-- Objective: agent와 tracker/orchestrator 자격증명을 분리하고 Codex subprocess 환경을 최소화
+- `PR-0 / SEC-01·02·03` — **Review**
+- Issue: [#38](https://github.com/angelos0424/symphony-ex/issues/38)
+- Branch: `fix/issue-38-pr0-dashboard-security`
+- Objective: Dashboard/API를 인증된 read-only observer로 만들고 runtime control을 명시적으로 분리
 - 구현/로컬 검증: 완료
-- validation: focused `55 tests/0 failures`, full `234 tests/0 failures`, format PASS, Entrypoint `sh -n` PASS, Compose 3종 `config --quiet` PASS
-- 다음 gate: 동일 immutable SHA 기준 spec compliance 및 quality/security review
+- validation: focused `43 tests/0 failures`, full `243 tests/0 failures`, format PASS, Credo `55 baseline findings/no new PR-0 finding`; Compose는 parent ignored env에서 검증 예정
+- 다음 gate: parent cherry-pick 후 Compose gate와 immutable spec/quality review
 
 ## 3. 설계 원칙
 
@@ -141,9 +148,9 @@ git worktree prune --dry-run
 
 | ID | 상태 | PR | Task | 주요 파일 |
 |---|---|---:|---|---|
-| SEC-01 | Todo | PR-0 | Dashboard read-only/control 분리 | `config/schema.ex`, `dashboard_live.ex` |
-| SEC-02 | Todo | PR-0 | Dashboard/API 인증 및 non-loopback fail-closed | `router.ex`, 새 auth plug, `symphony_ex.ex` |
-| SEC-03 | Todo | PR-0 | `check_origin`·배포 예시 강화 | `symphony_ex.ex`, `DEPLOY.md` |
+| SEC-01 | Review | PR-0 | Dashboard read-only/control 분리 | `config/schema.ex`, `dashboard_live.ex` |
+| SEC-02 | Review | PR-0 | Dashboard/API 인증 및 non-loopback fail-closed | `router.ex`, 새 auth plug, `symphony_ex.ex` |
+| SEC-03 | Review | PR-0 | `check_origin`·배포 예시 강화 | `symphony_ex.ex`, `DEPLOY.md` |
 | TRUST-01 | Done | PR-1A | Issue author/association domain 필드 | `domain/issue.ex`, `github/adapter.ex` |
 | TRUST-02 | Done | PR-1A | Trusted association/actor gate | `automation.ex`, `config/schema.ex`, `orchestrator.ex` |
 | TRUST-01-FU | Done | PR-1A-FU | lifecycle-comments 비활성 시 gated record write-back | `github/adapter.ex`, adapter tests |

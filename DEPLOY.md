@@ -38,10 +38,18 @@
 | `SYMPHONY_DASHBOARD_ENABLED` | 대시보드 활성화 | `false` |
 | `SYMPHONY_DASHBOARD_PORT` | HTTP 포트 | `4000` |
 | `SYMPHONY_DASHBOARD_HOST` | 바인드 주소 | `127.0.0.1` |
+| `SYMPHONY_DASHBOARD_CONTROLS_ENABLED` | runtime settings/restart control 허용 | `false` |
+| `SYMPHONY_DASHBOARD_AUTH_MODE` | 대시보드 인증 방식 (`basic`) | `basic` |
+| `SYMPHONY_DASHBOARD_USERNAME` | Basic Auth 사용자명. non-loopback bind에서 필수 | 없음 |
+| `SYMPHONY_DASHBOARD_PASSWORD` | Basic Auth 비밀번호. non-loopback bind에서 필수 | 없음 |
+| `SYMPHONY_DASHBOARD_ALLOWED_ORIGINS` | LiveView browser origin 쉼표 목록 | loopback origins |
 | `SYMPHONY_DASHBOARD_SECRET_KEY_BASE` | Phoenix 세션/서명용 secret. 대시보드 활성화 시 필수 | 없음 |
 
 > [!IMPORTANT]
-> 대시보드를 켜면 `SYMPHONY_DASHBOARD_SECRET_KEY_BASE`도 반드시 설정해야 합니다.
+> `127.0.0.1`/`localhost` loopback에서는 기본적으로 인증 없는 read-only observer로 사용할 수 있습니다. `0.0.0.0` 또는 다른 non-loopback 주소를 사용하려면 `SYMPHONY_DASHBOARD_USERNAME`과 `SYMPHONY_DASHBOARD_PASSWORD`를 반드시 설정해야 하며, controls는 별도로 명시적으로 켜야 합니다.
+
+> [!WARNING]
+> 대시보드를 `0.0.0.0`에 바인드할 때 인증 없는 `4000:4000` public 포트 매핑을 사용하지 마십시오. Tailscale/SSH tunnel 또는 인증된 reverse proxy를 사용하고, `SYMPHONY_DASHBOARD_ALLOWED_ORIGINS`를 실제 browser origin으로 제한하십시오.
 
 ### 로깅
 
@@ -106,10 +114,15 @@ services:
       - SYMPHONY_DASHBOARD_ENABLED=true
       - SYMPHONY_DASHBOARD_PORT=4000
       - SYMPHONY_DASHBOARD_HOST=0.0.0.0
+      - SYMPHONY_DASHBOARD_CONTROLS_ENABLED=false
+      - SYMPHONY_DASHBOARD_AUTH_MODE=basic
+      - SYMPHONY_DASHBOARD_USERNAME=operator
+      - SYMPHONY_DASHBOARD_PASSWORD=replace-with-dashboard-password
+      - SYMPHONY_DASHBOARD_ALLOWED_ORIGINS=http://127.0.0.1:4000,http://localhost:4000
       - SYMPHONY_DASHBOARD_SECRET_KEY_BASE=replace-with-a-long-random-secret
       - SYMPHONY_LOG_FORMAT=json
     ports:
-      - "4000:4000"
+      - "127.0.0.1:4000:4000"
 
 volumes:
   worktrees:

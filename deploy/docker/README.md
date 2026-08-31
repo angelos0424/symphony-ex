@@ -35,6 +35,19 @@ Each repo has independent worktree/source-cache volumes. Compose files remain re
 - HTTPS source URL with token-based git transport
 - repo-c: `poll-interval-ms: 300000`, `max-concurrent: 1`, `max-retries: 0`
 
+## Dashboard security
+
+Dashboard access is disabled by default in every Compose variant. If it is
+enabled, publish the host-side port on loopback only and use a Tailscale or
+SSH tunnel for remote inspection. A non-loopback bind inside the container
+requires Basic Auth via `SYMPHONY_DASHBOARD_USERNAME` and
+`SYMPHONY_DASHBOARD_PASSWORD`, and browser origins should be restricted with
+`SYMPHONY_DASHBOARD_ALLOWED_ORIGINS`.
+
+Runtime settings and restart controls remain disabled unless
+`SYMPHONY_DASHBOARD_CONTROLS_ENABLED=true` is explicitly configured. Do not
+publish an unauthenticated `4000:4000` port.
+
 ## First-time setup
 
 ```bash
