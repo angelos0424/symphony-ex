@@ -39,7 +39,6 @@ RUN groupadd --gid "${SYMPHONY_GID}" symphony \
       /srv/symphony/repo-a/worktrees /srv/symphony/repo-a/source-cache \
       /srv/symphony/repo-b/worktrees /srv/symphony/repo-b/source-cache \
       /srv/symphony/repo-c/worktrees /srv/symphony/repo-c/source-cache \
-      /var/lib/symphony/repo-a /var/lib/symphony/repo-b /var/lib/symphony/repo-c \
       /app/workflows
 
 WORKDIR /app

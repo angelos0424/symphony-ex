@@ -67,20 +67,47 @@ mkdir -p "$codex_home"
 chmod 700 "$codex_home"
 
 # Stage an explicit allowlist. Never copy the host Codex directory recursively.
-rm -f "$codex_home/auth.json" "$codex_home/config.toml"
-if [ -f /run/host-codex/auth.json ]; then
-  if [ ! -r /run/host-codex/auth.json ]; then
-    echo "Codex auth input is not readable by runtime UID $(id -u); stage a private UID-compatible copy" >&2
+auth_source=/run/host-codex/auth.json
+config_source=/run/host-codex/config.toml
+force_seed="${SYMPHONY_CODEX_FORCE_SEED:-false}"
+
+if [ ! -e "$auth_source" ]; then
+  echo "Codex auth input is required at $auth_source" >&2
+  exit 1
+fi
+if [ ! -f "$auth_source" ] || [ -L "$auth_source" ]; then
+  echo "Codex auth input must be a regular file" >&2
+  exit 1
+fi
+if [ ! -r "$auth_source" ]; then
+  echo "Codex auth input is not readable by runtime UID $(id -u); stage a private UID-compatible copy" >&2
+  exit 1
+fi
+
+if [ -e "$codex_home/auth.json" ] && { [ ! -f "$codex_home/auth.json" ] || [ -L "$codex_home/auth.json" ]; }; then
+  echo "Runtime Codex auth destination must be a regular file" >&2
+  exit 1
+fi
+if [ ! -f "$codex_home/auth.json" ] || [ "$force_seed" = true ]; then
+  install -m 0600 "$auth_source" "$codex_home/auth.json"
+fi
+
+if [ -e "$config_source" ]; then
+  if [ ! -f "$config_source" ] || [ -L "$config_source" ]; then
+    echo "Codex config input must be a regular file" >&2
     exit 1
   fi
-  install -m 0600 /run/host-codex/auth.json "$codex_home/auth.json"
-fi
-if [ -f /run/host-codex/config.toml ]; then
-  if [ ! -r /run/host-codex/config.toml ]; then
+  if [ ! -r "$config_source" ]; then
     echo "Codex config input is not readable by runtime UID $(id -u); stage a private UID-compatible copy" >&2
     exit 1
   fi
-  install -m 0600 /run/host-codex/config.toml "$codex_home/config.toml"
+  if [ -e "$codex_home/config.toml" ] && { [ ! -f "$codex_home/config.toml" ] || [ -L "$codex_home/config.toml" ]; }; then
+    echo "Runtime Codex config destination must be a regular file" >&2
+    exit 1
+  fi
+  if [ ! -f "$codex_home/config.toml" ] || [ "$force_seed" = true ]; then
+    install -m 0600 "$config_source" "$codex_home/config.toml"
+  fi
 fi
 
 if [ -n "${CODEX_MODEL:-}" ] && [ -f "$codex_home/config.toml" ]; then

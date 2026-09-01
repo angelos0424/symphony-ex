@@ -76,18 +76,23 @@ continue, but dispatch fails before the Codex app-server starts.
 
 The Docker runtime uses the non-root `symphony` account (UID/GID 10001 by
 default). Fresh named volumes inherit writable paths prepared for that identity;
-existing root-owned worktree, source-cache, and state volumes require the
-operator-run migration in `deploy/docker/README.md`. The normal entrypoint does
-not gain root or `CAP_CHOWN` to repair ownership.
+existing root-owned worktree and source-cache volumes require the operator-run
+migration in `deploy/docker/README.md`. Application breadcrumbs remain in the
+worktree volume; a separate durable orchestrator-state contract belongs to the
+later persistence milestone. The normal entrypoint does not gain root or
+`CAP_CHOWN` to repair ownership.
 
 Compose sets `no-new-privileges`, drops every Linux capability, and bounds PIDs,
 CPU, and memory. Only host Codex `auth.json` and `config.toml` are exposed as
 individual read-only bind mounts from a private host staging directory owned by
 UID 10001. The original host-login-owned mode `0600` files are copied into that
 directory with `sudo install`; they are never made group/world-readable. The
-entrypoint fails fast if an input is unreadable, then installs private copies
-into `/home/symphony/.codex`. History, sessions, skills, logs, and other host
-Codex files are outside the container boundary.
+entrypoint fails fast if an input is missing, wrong-type, or unreadable. Long
+bind syntax disables missing-path directory creation. An empty repo-specific
+Codex-state volume is seeded once; normal restart/recreate preserves runtime
+OAuth refreshes, and only an explicit force-seed replaces them. History,
+sessions, skills, logs, and other **host** Codex files remain outside the
+container boundary.
 
 The default Codex sandbox is `workspaceWrite`. A `dangerFullAccess` override is
 an explicit per-repository exception that must document why workspace write is

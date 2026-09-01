@@ -38,7 +38,10 @@ defmodule SymphonyEx.Deploy.DockerHardeningTest do
 
     assert entrypoint =~ "/run/host-codex/auth.json"
     assert entrypoint =~ "/run/host-codex/config.toml"
+    assert entrypoint =~ "Codex auth input is required"
+    assert entrypoint =~ "must be a regular file"
     assert entrypoint =~ "not readable by runtime UID"
+    assert entrypoint =~ "SYMPHONY_CODEX_FORCE_SEED"
     assert entrypoint =~ "CODEX_HOME"
     assert entrypoint =~ "/.codex}"
     refute entrypoint =~ "cp -a /run/host-codex/."
@@ -54,8 +57,13 @@ defmodule SymphonyEx.Deploy.DockerHardeningTest do
       assert compose =~ ~r/pids_limit:\s*\d+/, file
       assert compose =~ ~r/cpus:\s*"[0-9.]+"/, file
       assert compose =~ ~r/mem_limit:\s*\S+/, file
-      assert compose =~ "/auth.json:/run/host-codex/auth.json:ro", file
-      assert compose =~ "/config.toml:/run/host-codex/config.toml:ro", file
+      assert compose =~ "source: ${SYMPHONY_CODEX_HOME}/auth.json", file
+      assert compose =~ "target: /run/host-codex/auth.json", file
+      assert compose =~ "source: ${SYMPHONY_CODEX_HOME}/config.toml", file
+      assert compose =~ "target: /run/host-codex/config.toml", file
+      assert length(Regex.scan(~r/create_host_path:\s*false/, compose)) == 2, file
+      assert compose =~ "/home/symphony/.codex", file
+      refute compose =~ "SYMPHONY_STATE_ROOT", file
       refute compose =~ "/.codex:/run/host-codex:ro", file
     end
   end
@@ -76,6 +84,8 @@ defmodule SymphonyEx.Deploy.DockerHardeningTest do
     assert canary =~ "stat -c %a"
     assert canary =~ "mode=%s uid=%s gid=%s"
     assert canary =~ "health=healthy"
+    assert canary =~ "runtime-refreshed-auth"
+    assert canary =~ "SYMPHONY_CODEX_FORCE_SEED=true"
   end
 
   defp read!(relative_path) do

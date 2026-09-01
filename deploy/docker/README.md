@@ -1,8 +1,8 @@
 # SymphonyEx Docker deployment templates
 
 This directory uses one Compose project per repository. The three variants share
-the same hardened image but keep workflows, worktrees, source caches, and state
-volumes isolated.
+the same hardened image but keep workflows, worktrees, source caches, and Codex
+runtime-state volumes isolated.
 
 ## Security and resource defaults
 
@@ -14,7 +14,7 @@ Every variant:
 - uses the image's dashboard-independent BEAM liveness healthcheck;
 - mounts only host Codex `auth.json` and `config.toml`, read-only, then stages
   private copies in `/home/symphony/.codex`;
-- uses independent writable worktree, source-cache, and state volumes; and
+- uses independent writable worktree, source-cache, and Codex-state volumes; and
 - defaults Codex `thread-sandbox` to `workspaceWrite`.
 
 `dangerFullAccess` is not a global toggle. If one repository genuinely requires
@@ -70,9 +70,27 @@ fi
 printf 'SYMPHONY_CODEX_HOME=/var/lib/symphony/codex\n' > .env
 ```
 
-Repeat the two `sudo install` copy steps whenever Codex OAuth or configuration
-changes. Never make credential inputs group/world-readable. The entrypoint fails
-before boot with the runtime UID when a mounted input exists but is unreadable.
+Never make credential inputs group/world-readable. Compose uses long bind syntax
+with `create_host_path: false`, so a missing input fails instead of becoming a
+root-owned directory. The entrypoint also rejects missing, wrong-type, or
+unreadable auth inputs before boot.
+
+Each repository has a persistent `/home/symphony/.codex` named volume. The
+staged files seed an empty volume; normal restarts and recreates preserve a
+runtime-refreshed `auth.json` instead of overwriting it with a stale staged copy.
+To intentionally replace a persisted copy after updating the host staging file,
+run a one-shot forced seed for that repository, then recreate it:
+
+```bash
+docker compose --env-file .env -f docker-compose.repo-a.yml run --rm \
+  -e SYMPHONY_CODEX_FORCE_SEED=true symphony-repo-a true
+docker compose --env-file .env -f docker-compose.repo-a.yml up -d --force-recreate
+```
+
+Replace `repo-a` as needed. Before deleting or restoring a Codex-state volume,
+copy its current runtime `auth.json` back to the private staging path with
+`docker cp` plus `sudo install -o 10001 -g 10001 -m 0600`; never print it or
+write it to logs. A deleted empty volume is reseeded from the staged files.
 
 Set `GITHUB_TRACKER_TOKEN` and the repo-scoped `GITHUB_AGENT_TOKEN` in ignored
 `env/common.env`. The entrypoint resolves only the agent token at Git credential
@@ -99,9 +117,8 @@ for repo in a b c; do
   docker run --rm --user 0 --entrypoint sh \
     -v "symphony-repo-${repo}_repo_${repo}_worktrees:/mnt/worktrees" \
     -v "symphony-repo-${repo}_repo_${repo}_source_cache:/mnt/source-cache" \
-    -v "symphony-repo-${repo}_repo_${repo}_state:/mnt/state" \
     symphony-ex:hardening -c \
-    'chown -R 10001:10001 /mnt/worktrees /mnt/source-cache /mnt/state'
+    'chown -R 10001:10001 /mnt/worktrees /mnt/source-cache'
 done
 ```
 
@@ -114,6 +131,10 @@ only if the previous runtime explicitly requires root ownership, reverse the
 ownership after backing up by rerunning the loop with
 `chown -R 0:0 ...`. Never roll back by restoring broad capabilities or mounting
 the whole host Codex directory.
+
+Application breadcrumbs currently live under the worktree volume; there is no
+separate `SYMPHONY_STATE_ROOT` runtime contract yet. Durable orchestrator state
+remains a later persistence milestone and must not be inferred from Compose.
 
 ## Validate and run
 
@@ -129,6 +150,12 @@ docker compose --env-file .env -f docker-compose.repo-c.yml logs -f
 ```
 
 Replace `repo-c` with `repo-a` or `repo-b` as needed.
+
+The immutable release disables tzdata's in-place updater because `/app` is
+read-only to the runtime user. Rebuild the image after tzdata/IANA database
+updates (and at least on the normal monthly dependency-refresh cadence), verify
+night-worker timezone windows in staging, and deploy the rebuilt image. Do not
+re-enable runtime writes under `/app` as a freshness workaround.
 
 ## Liveness versus readiness
 

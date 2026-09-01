@@ -112,8 +112,8 @@ PR-1C를 제외한 이후 구현 Task는 `Todo`이며, 각 Task는 Issue와 bran
 - PR: pending (구현 branch에서는 GitHub 상태를 변경하지 않음)
 - Objective: non-root container·sandbox·health migration
 - 구현 범위: non-root UID 10001, Codex auth/config allowlist, `workspaceWrite`, Compose least privilege/resource limits, BEAM liveness, volume migration/rollback 문서
-- 검증: focused `6 tests/0 failures`, full `249 tests/0 failures`, format/shell/Compose 3종 PASS, `docker-init` PID 1 + private mode-0600 credential runtime canary PASS
-- 독립 review: SHA `19a9dd9`의 liveness/credential-input finding 2건 수정 완료, 새 exact SHA 재검토 대기
+- 검증: focused `6 tests/0 failures`, full `249 tests/0 failures`, format/shell/Compose 3종 PASS, `docker-init` PID 1 + private mode-0600 credential + OAuth refresh-preservation runtime canary PASS
+- 독립 review: SHA `47c78bb` SPEC PASS; quality/security의 mount type·refresh lifecycle finding 2건과 tzdata/state 문서 debt 수정 완료, 새 exact SHA 재검토 대기
 - 다음 action: exact branch SHA 독립 spec/security review 후 PR 생성·CI 확인
 
 ## 3. 설계 원칙
@@ -367,7 +367,7 @@ GITHUB_AGENT_TOKEN    # clone/push/PR 전용, repo-scoped
 
 **Steps:**
 
-1. runtime user `symphony`를 만들고 writable worktree/source-cache/state volume ownership을 정의한다.
+1. runtime user `symphony`를 만들고 writable worktree/source-cache/Codex-state volume ownership을 정의한다. 별도 durable orchestrator state는 PR-5B 범위로 유지한다.
 2. 전체 `~/.codex` 대신 필요한 auth/config 파일만 `/home/symphony/.codex`로 복사한다.
 3. 기본 sandbox를 `workspaceWrite`로 낮추고 `dangerFullAccess`는 repo별 명시 예외로만 허용한다.
 4. Compose에 `no-new-privileges`, `cap_drop`, PID/CPU/memory 한도를 추가한다.

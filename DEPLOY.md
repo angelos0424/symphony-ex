@@ -69,7 +69,7 @@ BEAM-process liveness healthcheck that does not depend on the dashboard.
 
 All three Compose variants enforce `no-new-privileges`, drop all capabilities,
 and bound PIDs, CPU, and memory. They provide separate writable named volumes
-for worktrees, source cache, and state. The tracked workflows default Codex to
+for worktrees, source cache, and Codex runtime state. The tracked workflows default Codex to
 `workspaceWrite`; `dangerFullAccess` requires a documented change to only the
 specific repository workflow, with rationale and rollback.
 
@@ -93,6 +93,11 @@ in `deploy/docker/README.md`. The non-root entrypoint intentionally never
 `chown`s mounts. Rollback is stop → restore backup → previous image; reverse
 ownership to `0:0` only if the previous runtime actually requires it, and never
 restore privileged capabilities or a whole-host-Codex-home mount.
+
+The entrypoint seeds an empty repo-specific Codex-state volume and preserves
+runtime-refreshed OAuth state on normal restart/recreate. Missing host inputs do
+not become directories (`create_host_path: false`). Use the documented explicit
+force-seed flow when an operator intentionally replaces the persisted copy.
 
 Docker health is **liveness only**: it finds a live BEAM process even when
 Compose `init: true` makes `docker-init` PID 1.
