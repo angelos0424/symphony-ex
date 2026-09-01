@@ -117,8 +117,9 @@ PR-2 이후 구현 Task는 `Todo`이며, 각 Task는 Issue와 branch를 만든 �
 - `PR-2 / CTRL-01·02·03` — **In Review**
 - Issue: [#42](https://github.com/angelos0424/symphony-ex/issues/42)
 - Branch: `issue-42-active-run-restart-guard`
-- Checkpoints: core `5c7f0d500a26aa42577b27f6cec4a70827af68cf`, UI/audit pending final commit
+- Checkpoints: core `5c7f0d500a26aa42577b27f6cec4a70827af68cf`, UI/audit `097b32b0894008ce0a54bed335673a92c6d67bce`
 - Objective: active-run 중 orchestrator restart fail-closed guard와 bounded settings/audit UX
+- Verification: full `257 tests/0 failures`, dashboard `11/11`, API `5/5`, format/diff PASS
 - 다음 action: exact-SHA spec/quality review 후 PR 생성 및 원격 검증
 
 ## 3. 설계 원칙
