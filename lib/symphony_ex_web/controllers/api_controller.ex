@@ -19,6 +19,7 @@ defmodule SymphonyExWeb.ApiController do
       settings: snapshot.settings,
       gated: snapshot.gated,
       write_back_stages: snapshot.write_back_stages,
+      audit_events: snapshot.audit_events,
       running_count: snapshot.summary.running_count,
       retry_queue_count: snapshot.summary.retry_queue_count
     })
@@ -34,7 +35,8 @@ defmodule SymphonyExWeb.ApiController do
       gated: snapshot.gated,
       completed: snapshot.completed,
       completed_issue_identifiers: snapshot.completed_issue_identifiers,
-      write_back_stages: snapshot.write_back_stages
+      write_back_stages: snapshot.write_back_stages,
+      audit_events: snapshot.audit_events
     })
   end
 

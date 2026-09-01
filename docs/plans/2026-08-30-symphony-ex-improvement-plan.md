@@ -114,11 +114,12 @@ PR-2 이후 구현 Task는 `Todo`이며, 각 Task는 Issue와 branch를 만든 �
 
 현재 다음 작업:
 
-- `PR-2 / CTRL-01` — **Picked Up**
+- `PR-2 / CTRL-01·02·03` — **In Review**
 - Issue: [#42](https://github.com/angelos0424/symphony-ex/issues/42)
 - Branch: `issue-42-active-run-restart-guard`
-- Objective: active-run 중 orchestrator restart fail-closed guard
-- 다음 action: active-run guard/snapshot/schema를 먼저 구현하고 dashboard UX·audit를 연결
+- Checkpoints: core `5c7f0d500a26aa42577b27f6cec4a70827af68cf`, UI/audit pending final commit
+- Objective: active-run 중 orchestrator restart fail-closed guard와 bounded settings/audit UX
+- 다음 action: exact-SHA spec/quality review 후 PR 생성 및 원격 검증
 
 ## 3. 설계 원칙
 
@@ -163,9 +164,9 @@ PR-2 이후 구현 Task는 `Todo`이며, 각 Task는 Issue와 branch를 만든 �
 | TRUST-02-FU | Done | PR-1A-FU | `Gated only` dashboard queue filter | `dashboard_live.ex`, dashboard tests |
 | TRUST-03 | Done | PR-1B | Agent/orchestrator token 분리 | `config.ex`, `github/client.ex`, app-server, Docker env/entrypoint |
 | TRUST-04 | Done | PR-1C | Non-root container·sandbox·health migration | `Dockerfile`, Compose, workflows |
-| CTRL-01 | Todo | PR-2 | Active-run restart guard | `runtime_control.ex`, `orchestrator.ex` |
-| CTRL-02 | Todo | PR-2 | Active-run restart 거부 UX·audit | `dashboard_live.ex`, `runtime_snapshot.ex` |
-| CTRL-03 | Todo | PR-2 | 설정 상한·확인 UX | `runtime_control.ex`, dashboard tests |
+| CTRL-01 | In Review | PR-2 | Active-run restart guard | `runtime_control.ex`, `orchestrator.ex` |
+| CTRL-02 | In Review | PR-2 | Active-run restart 거부 UX·audit | `dashboard_live.ex`, `runtime_snapshot.ex` |
+| CTRL-03 | In Review | PR-2 | 설정 상한·확인 UX | `runtime_control.ex`, dashboard tests |
 | LIFE-01 | Todo | PR-3 | 실패 release와 completed 의미 분리 | `orchestrator.ex`, lifecycle tests |
 | LIFE-02 | Todo | PR-3 | `Retry now/Stop retrying/Resume` API contract | `runtime_control.ex`, API/LiveView |
 | WB-01 | Todo | PR-4 | Essential write-back 완료 gate | `orchestrator.ex`, `github/adapter.ex` |

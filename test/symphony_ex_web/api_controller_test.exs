@@ -43,6 +43,15 @@ defmodule SymphonyExWeb.ApiControllerTest do
       reason: "labels_down"
     })
 
+    Observability.record_audit_event(%{
+      event: "orchestrator_restart_rejected",
+      active_identifiers: ["SYM-1"],
+      reason: "active_runs",
+      token: "api-secret-token",
+      prompt: "never return this prompt",
+      settings: %{max_retries: 20}
+    })
+
     now_mono_ms = System.monotonic_time(:millisecond)
     completed_workspace = temp_workspace("api-controller-completed")
 
@@ -170,6 +179,18 @@ defmodule SymphonyExWeb.ApiControllerTest do
     assert body["gated"] |> hd() |> get_in(["issue", "identifier"]) == "TRUST-API"
     assert body["gated"] |> hd() |> get_in(["gating_reason"]) == "untrusted_issue_author"
     assert body["write_back_stages"]["alert_count"] == 1
+
+    assert body["audit_events"] == [
+             %{
+               "event" => "orchestrator_restart_rejected",
+               "active_identifiers" => ["SYM-1"],
+               "reason" => "active_runs"
+             }
+           ]
+
+    refute Map.has_key?(hd(body["audit_events"]), "settings")
+    refute conn.resp_body =~ "api-secret-token"
+    refute conn.resp_body =~ "never return this prompt"
     assert body["running_count"] == 1
   end
 
@@ -219,6 +240,18 @@ defmodule SymphonyExWeb.ApiControllerTest do
     assert body["completed"] |> hd() |> get_in(["thread_id"]) == "thread-0"
     assert body["completed"] |> hd() |> get_in(["log_excerpt", "event_count"]) == 2
     assert body["completed_issue_identifiers"] == ["SYM-0"]
+
+    assert body["audit_events"] == [
+             %{
+               "event" => "orchestrator_restart_rejected",
+               "active_identifiers" => ["SYM-1"],
+               "reason" => "active_runs"
+             }
+           ]
+
+    refute Map.has_key?(hd(body["audit_events"]), "settings")
+    refute conn.resp_body =~ "api-secret-token"
+    refute conn.resp_body =~ "never return this prompt"
 
     assert Enum.map(body["write_back_stages"]["recent"], & &1["stage"]) == [
              "optional",
