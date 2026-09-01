@@ -83,9 +83,9 @@ git worktree prune --dry-run
 - 구현/리뷰/merge: 완료
 - merge commit: `b31dfe93389545fd7914b2f0acd2c56300f9c42d`
 - main 검증: `b31dfe93389545fd7914b2f0acd2c56300f9c42d`에서 focused `43 tests/0 failures`, full `243 tests/0 failures`, format/shell/Compose PASS; GitHub Actions workflow 없음
-- 다음 정확한 작업: `PR-1C / TRUST-04` Issue #40 구현의 독립 리뷰와 PR/CI 확인
+- 다음 정확한 작업: `PR-2 / CTRL-01`을 새 GitHub Issue로 등록하고 Issue 기준 branch에서 구현 시작
 
-PR-1C를 제외한 이후 구현 Task는 `Todo`이며, 각 Task는 Issue와 branch를 만든 뒤 순차적으로 pick한다.
+PR-2 이후 구현 Task는 `Todo`이며, 각 Task는 Issue와 branch를 만든 뒤 순차적으로 pick한다.
 
 완료된 후속 작업:
 
@@ -104,17 +104,19 @@ PR-1C를 제외한 이후 구현 Task는 `Todo`이며, 각 Task는 Issue와 bran
 - merge commit: `16d16b419d42b5eaddac36ce1ac64d5f1d57887b`
 - main 검증: `16d16b419d42b5eaddac36ce1ac64d5f1d57887b`에서 format PASS, full `234 tests/0 failures`; GitHub Actions workflow 없음
 
+- `PR-1C / TRUST-04` — **Done**
+- Issue: [#40](https://github.com/angelos0424/symphony-ex/issues/40)
+- PR: [#41](https://github.com/angelos0424/symphony-ex/pull/41)
+- 구현/리뷰/merge: 완료
+- merge commit: `c6bd1c76e689c5405310eb995a3e2ef1f0910be2`
+- main 검증: `c6bd1c76e689c5405310eb995a3e2ef1f0910be2`에서 focused `6 tests/0 failures`, full `249 tests/0 failures`, format/shell/Compose 3종 PASS, Docker runtime canary PASS; GitHub Actions workflow 없음
+- 리뷰: exact-SHA spec PASS, quality/security APPROVED (Critical/Important/Minor 0)
+
 현재 다음 작업:
 
-- `PR-1C / TRUST-04` — **Review**
-- Issue: [#40](https://github.com/angelos0424/symphony-ex/issues/40)
-- Branch: `issue-40-container-hardening`
-- PR: pending (구현 branch에서는 GitHub 상태를 변경하지 않음)
-- Objective: non-root container·sandbox·health migration
-- 구현 범위: non-root UID 10001, Codex auth/config allowlist, `workspaceWrite`, Compose least privilege/resource limits, BEAM liveness, volume migration/rollback 문서
-- 검증: focused `6 tests/0 failures`, full `249 tests/0 failures`, format/shell/Compose 3종 PASS, `docker-init` PID 1 + private mode-0600 credential + OAuth refresh-preservation runtime canary PASS
-- 독립 review: SHA `47c78bb` SPEC PASS; quality/security의 mount type·refresh lifecycle finding 2건과 tzdata/state 문서 debt 수정 완료, 새 exact SHA 재검토 대기
-- 다음 action: exact branch SHA 독립 spec/security review 후 PR 생성·CI 확인
+- `PR-2 / CTRL-01` — **Todo**
+- Objective: active-run 중 orchestrator restart fail-closed guard
+- 다음 action: GitHub Issue 등록 후 Issue 기준 branch에서 구현 시작
 
 ## 3. 설계 원칙
 
@@ -158,7 +160,7 @@ PR-1C를 제외한 이후 구현 Task는 `Todo`이며, 각 Task는 Issue와 bran
 | TRUST-01-FU | Done | PR-1A-FU | lifecycle-comments 비활성 시 gated record write-back | `github/adapter.ex`, adapter tests |
 | TRUST-02-FU | Done | PR-1A-FU | `Gated only` dashboard queue filter | `dashboard_live.ex`, dashboard tests |
 | TRUST-03 | Done | PR-1B | Agent/orchestrator token 분리 | `config.ex`, `github/client.ex`, app-server, Docker env/entrypoint |
-| TRUST-04 | Review | PR-1C | Non-root container·sandbox·health migration | `Dockerfile`, Compose, workflows |
+| TRUST-04 | Done | PR-1C | Non-root container·sandbox·health migration | `Dockerfile`, Compose, workflows |
 | CTRL-01 | Todo | PR-2 | Active-run restart guard | `runtime_control.ex`, `orchestrator.ex` |
 | CTRL-02 | Todo | PR-2 | Active-run restart 거부 UX·audit | `dashboard_live.ex`, `runtime_snapshot.ex` |
 | CTRL-03 | Todo | PR-2 | 설정 상한·확인 UX | `runtime_control.ex`, dashboard tests |
