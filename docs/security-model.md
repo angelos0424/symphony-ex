@@ -72,13 +72,47 @@ treated as both roles only when the split variables are not configured.
 If `GITHUB_AGENT_TOKEN` is absent after migration, polling and observation may
 continue, but dispatch fails before the Codex app-server starts.
 
+## Container and Codex boundary
+
+The Docker runtime uses the non-root `symphony` account (UID/GID 10001 by
+default). Fresh named volumes inherit writable paths prepared for that identity;
+existing root-owned worktree and source-cache volumes require the operator-run
+migration in `deploy/docker/README.md`. Application breadcrumbs remain in the
+worktree volume; a separate durable orchestrator-state contract belongs to the
+later persistence milestone. The normal entrypoint does not gain root or
+`CAP_CHOWN` to repair ownership.
+
+Compose sets `no-new-privileges`, drops every Linux capability, and bounds PIDs,
+CPU, and memory. Only host Codex `auth.json` and `config.toml` are exposed as
+individual read-only bind mounts from a private host staging directory owned by
+UID 10001. The original host-login-owned mode `0600` files are copied into that
+directory with `sudo install`; they are never made group/world-readable. The
+entrypoint fails fast if an input is missing, wrong-type, or unreadable. Long
+bind syntax disables missing-path directory creation. An empty repo-specific
+Codex-state volume is seeded once; normal restart/recreate preserves runtime
+OAuth refreshes, and only an explicit force-seed replaces them. History,
+sessions, skills, logs, and other **host** Codex files remain outside the
+container boundary.
+
+The default Codex sandbox is `workspaceWrite`. A `dangerFullAccess` override is
+an explicit per-repository exception that must document why workspace write is
+insufficient, its affected paths, compensating controls, and rollback. It must
+not be applied globally across workflow variants.
+
+Docker health scans `/proc` for BEAM so it remains valid when `docker-init` is
+PID 1. It proves dashboard-independent process liveness only. Tracker
+readiness is a separate freshness decision based on a recent successful poll,
+current GitHub auth/rate-limit state, and source access. A healthy container must
+not be interpreted as tracker-ready, and the optional dashboard is not a
+readiness authority.
+
 ## Out of scope
 
 This policy does not replace:
 
 - dashboard/API authentication;
-- Codex sandbox restrictions;
-- container non-root hardening;
-- GitHub Project permission administration.
+- GitHub Project permission administration;
+- multi-tenant scheduling or active-run restart/lifecycle semantics.
 
-Those are separate hardening tasks in the SymphonyEx improvement plan.
+Those remain separate controls or follow-up tasks in the SymphonyEx improvement
+plan.

@@ -2,12 +2,20 @@ name: symphony-repo-b
 
 services:
   symphony-repo-b:
+    image: symphony-ex:hardening
     build:
       context: ../..
       dockerfile: deploy/docker/Dockerfile
     container_name: symphony-repo-b
     restart: unless-stopped
     init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 256
+    cpus: "1.0"
+    mem_limit: 2g
     env_file:
       - ./env/common.env
       - ./env/repo-b.env
@@ -16,11 +24,24 @@ services:
       SYMPHONY_WORKFLOW_PATH: /app/workflows/repo-b.WORKFLOW.md
       SYMPHONY_DASHBOARD_ENABLED: "false"
     volumes:
-      - ${HOME}/.codex:/run/host-codex:ro
+      - type: bind
+        source: ${SYMPHONY_CODEX_HOME}/auth.json
+        target: /run/host-codex/auth.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${SYMPHONY_CODEX_HOME}/config.toml
+        target: /run/host-codex/config.toml
+        read_only: true
+        bind:
+          create_host_path: false
       - ./workflows/repo-b.WORKFLOW.md:/app/workflows/repo-b.WORKFLOW.md:ro
       - repo_b_worktrees:/srv/symphony/repo-b/worktrees
       - repo_b_source_cache:/srv/symphony/repo-b/source-cache
+      - repo_b_codex_state:/home/symphony/.codex
 
 volumes:
   repo_b_worktrees:
   repo_b_source_cache:
+  repo_b_codex_state:

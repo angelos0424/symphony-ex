@@ -30,7 +30,8 @@ automation:
     allowed-actors: []
 codex:
   command: codex app-server
-  thread-sandbox: dangerFullAccess
+  # Least-privilege default; document any dangerFullAccess override per repository.
+  thread-sandbox: workspaceWrite
   read-timeout-ms: 5000
   turn-timeout-ms: 3600000
   stall-timeout-ms: 900000

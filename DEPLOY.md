@@ -62,106 +62,52 @@
 
 ## Docker Compose 배포
 
-```dockerfile
-FROM hexpm/elixir:1.19.0-erlang-28.0-debian-bookworm-20240612 AS build
+Canonical production templates live under `deploy/docker/`; do not copy the
+older inline examples into production. The image runs as `symphony` UID/GID
+10001, stages only host Codex `auth.json` and `config.toml`, and declares a
+BEAM-process liveness healthcheck that does not depend on the dashboard.
 
-WORKDIR /app
-RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
-RUN mix local.hex --force && mix local.rebar --force
+All three Compose variants enforce `no-new-privileges`, drop all capabilities,
+and bound PIDs, CPU, and memory. They provide separate writable named volumes
+for worktrees, source cache, and Codex runtime state. The tracked workflows default Codex to
+`workspaceWrite`; `dangerFullAccess` requires a documented change to only the
+specific repository workflow, with rationale and rollback.
 
-ENV MIX_ENV=prod
-COPY mix.exs mix.lock ./
-RUN mix deps.get --only prod && mix deps.compile
+```bash
+cd deploy/docker
+cp .env.example .env
+cp env/common.env.example env/common.env
+cp env/repo-a.env.example env/repo-a.env
+cp env/repo-b.env.example env/repo-b.env
+cp env/repo-c.env.example env/repo-c.env
 
-COPY lib lib/
-COPY config config/
-COPY priv priv/
-COPY WORKFLOW.md ./
-RUN mix compile
-RUN mix release
-
-FROM debian:bookworm-slim
-
-RUN apt-get update && apt-get install -y git openssh-client && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /app
-COPY --from=build /app/_build/prod/rel/symphony_ex ./
-
-ENV LANG=en_US.UTF-8
-CMD ["bin/symphony_ex", "start"]
+# First stage private UID-10001 copies as documented in deploy/docker/README.md.
+docker compose --env-file .env -f docker-compose.repo-a.yml config
+docker compose --env-file .env -f docker-compose.repo-b.yml config
+docker compose --env-file .env -f docker-compose.repo-c.yml config
 ```
 
-```yaml
-version: "3.8"
+Before first hardened startup on existing named volumes, stop all variants,
+back up the volumes, and perform the explicit one-time UID migration documented
+in `deploy/docker/README.md`. The non-root entrypoint intentionally never
+`chown`s mounts. Rollback is stop → restore backup → previous image; reverse
+ownership to `0:0` only if the previous runtime actually requires it, and never
+restore privileged capabilities or a whole-host-Codex-home mount.
 
-services:
-  symphony:
-    build: .
-    restart: unless-stopped
-    volumes:
-      - ./WORKFLOW.md:/app/WORKFLOW.md:ro
-      - worktrees:/opt/symphony/worktrees
-      - source-cache:/opt/symphony/source-cache
-    environment:
-      - GITHUB_TRACKER_TOKEN=${GITHUB_TRACKER_TOKEN}
-      - GITHUB_AGENT_TOKEN=${GITHUB_AGENT_TOKEN}
-      - GITHUB_OWNER=${GITHUB_OWNER}
-      - GITHUB_REPO=${GITHUB_REPO}
-      - GITHUB_PROJECT_NUMBER=${GITHUB_PROJECT_NUMBER:-}
-      - WORKSPACE_ROOT=/opt/symphony/worktrees
-      - SOURCE_REPO_URL=git@github.com:my-org/my-repo.git
-      - SOURCE_CACHE_ROOT=/opt/symphony/source-cache
-      - SYMPHONY_DASHBOARD_ENABLED=true
-      - SYMPHONY_DASHBOARD_PORT=4000
-      - SYMPHONY_DASHBOARD_HOST=0.0.0.0
-      - SYMPHONY_DASHBOARD_CONTROLS_ENABLED=false
-      - SYMPHONY_DASHBOARD_AUTH_MODE=basic
-      - SYMPHONY_DASHBOARD_USERNAME=operator
-      - SYMPHONY_DASHBOARD_PASSWORD=replace-with-dashboard-password
-      - SYMPHONY_DASHBOARD_ALLOWED_ORIGINS=http://127.0.0.1:4000,http://localhost:4000
-      - SYMPHONY_DASHBOARD_SECRET_KEY_BASE=replace-with-a-long-random-secret
-      - SYMPHONY_LOG_FORMAT=json
-    ports:
-      - "127.0.0.1:4000:4000"
+The entrypoint seeds an empty repo-specific Codex-state volume and preserves
+runtime-refreshed OAuth state on normal restart/recreate. Missing host inputs do
+not become directories (`create_host_path: false`). Use the documented explicit
+force-seed flow when an operator intentionally replaces the persisted copy.
 
-volumes:
-  worktrees:
-  source-cache:
-```
+Docker health is **liveness only**: it finds a live BEAM process even when
+Compose `init: true` makes `docker-init` PID 1.
+Tracker-freshness readiness is separate and requires a recent successful GitHub
+poll, no current auth/rate-limit failure, and usable source access. Until there
+is a stable readiness endpoint, assess freshness through structured logs and
+GitHub Project truth rather than the optional dashboard or Docker health.
 
-## Multi-repo Docker Compose starter
-
-단일 repo compose 예시만으로 부족할 때는 아래 템플릿을 시작점으로 쓰면 됩니다.
-
-- `deploy/docker/Dockerfile`
-- `deploy/docker/docker-compose.repo-a.yml`
-- `deploy/docker/docker-compose.repo-b.yml`
-- `deploy/docker/docker-compose.repo-c.yml`
-- `deploy/docker/env/common.env`
-- `deploy/docker/env/repo-a.env`
-- `deploy/docker/env/repo-b.env`
-- `deploy/docker/env/repo-c.env`
-- `deploy/docker/workflows/repo-a.WORKFLOW.md`
-- `deploy/docker/workflows/repo-b.WORKFLOW.md`
-- `deploy/docker/workflows/repo-c.WORKFLOW.md`
-- `deploy/docker/README.md`
-
-권장 운영 기본값:
-
-- repo-a = `activities`
-- repo-b = `cp` / `church_platform`
-- repo-c = `saju-adult`
-- repo별 container 1개
-- repo별 workflow 1개
-- repo별 workspace volume 1개
-- repo별 source-cache volume 1개
-- `poll-interval-ms: 60000`
-- `max-concurrent: 1`
-- dashboard disabled
-- GitHub API와 Issue/Project write-back은 `GITHUB_TRACKER_TOKEN`
-- Codex clone/push/PR auth는 `GITHUB_AGENT_TOKEN`
-
-이 starter는 Intel N100 같은 소형 호스트에서도 무리하지 않도록 보수적인 값으로 맞춰져 있습니다.
+See `deploy/docker/README.md` for exact migration, rollback, validation, and run
+commands.
 
 ## systemd 배포
 
@@ -250,6 +196,7 @@ orchestrator:
   max-retries: 3
 codex:
   command: codex app-server
+  thread-sandbox: workspaceWrite
   stall-timeout-ms: 300000
 dashboard:
   enabled: true
