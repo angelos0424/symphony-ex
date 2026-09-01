@@ -84,6 +84,15 @@ defmodule SymphonyExWeb.DashboardLiveTest do
       reason: "labels_down"
     })
 
+    Observability.record_audit_event(%{
+      event: "orchestrator_restart_rejected",
+      active_identifiers: ["SYM-1"],
+      reason: "active_runs",
+      token: "dashboard-secret-token",
+      prompt: "do not render this prompt",
+      settings: %{poll_interval_ms: 1}
+    })
+
     now_mono_ms = System.monotonic_time(:millisecond)
     completed_workspace = temp_workspace("dashboard-live-completed")
 
@@ -255,6 +264,11 @@ defmodule SymphonyExWeb.DashboardLiveTest do
     assert html =~ "Write-back alerts"
     assert html =~ "GitHub rate limit"
     assert html =~ "4321/5000"
+    assert html =~ "Recent runtime audit"
+    assert html =~ "orchestrator_restart_rejected"
+    assert html =~ "active_runs"
+    refute html =~ "dashboard-secret-token"
+    refute html =~ "do not render this prompt"
     assert html =~ "Orchestrator settings"
     assert html =~ "Runtime controls"
     assert html =~ "Runtime controls are disabled"
@@ -320,6 +334,24 @@ defmodule SymphonyExWeb.DashboardLiveTest do
     assert html =~ "Save settings &amp; reload"
     assert html =~ "Restart orchestrator"
     assert html =~ "Restart dashboard endpoint"
+    assert html =~ "Active run identifiers"
+    assert html =~ "SYM-1"
+    assert html =~ "Orchestrator restart is blocked while active runs exist"
+    assert html =~ "force/drain/cancel is unavailable in this milestone"
+    assert html =~ ~s(aria-disabled="true")
+    assert Regex.match?(~r/id="restart-orchestrator-button"[^>]*disabled/, html)
+    assert html =~ ~s(max="86400000")
+    assert html =~ ~s(max="32")
+    assert html =~ ~s(max="20")
+    assert html =~ "Allowed range"
+    assert html =~ ~s(id="restart-endpoint-button")
+    refute Regex.match?(~r/id="restart-endpoint-button"[^>]*disabled/, html)
+
+    {:ok, _view, full_page_html} = live(recycle(conn), "/runs/SYM-0")
+    assert full_page_html =~ "Runtime controls"
+    assert full_page_html =~ "Active run identifiers"
+    assert full_page_html =~ "Orchestrator restart is blocked while active runs exist"
+    assert full_page_html =~ ~s(aria-disabled="true")
   end
 
   test "rejects runtime control events while controls are disabled", %{conn: conn} do

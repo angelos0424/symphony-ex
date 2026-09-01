@@ -19,6 +19,15 @@ defmodule SymphonyEx.RuntimeSnapshotTest do
       reason: "labels_down"
     })
 
+    Observability.record_audit_event(%{
+      event: "orchestrator_restart_rejected",
+      active_identifiers: ["SYM-1"],
+      reason: "active_runs",
+      token: "tracker-secret-token",
+      prompt: "never expose this prompt",
+      settings: %{max_concurrent: 99}
+    })
+
     running_issue = issue_fixture("SYM-1", labels: ["bug"], assignees: ["n100"])
     retry_issue = issue_fixture("SYM-2", labels: ["docs"], conflict_hints: ["service:docs"])
     completed_issue = issue_fixture("SYM-0", labels: ["feature"])
@@ -204,6 +213,18 @@ defmodule SymphonyEx.RuntimeSnapshotTest do
 
     assert Enum.map(snapshot.write_back_stages.recent, & &1.stage) == ["optional", "essential"]
     assert snapshot.write_back_stages.alert_count == 1
+
+    assert snapshot.audit_events == [
+             %{
+               event: "orchestrator_restart_rejected",
+               active_identifiers: ["SYM-1"],
+               reason: "active_runs"
+             }
+           ]
+
+    refute inspect(snapshot.audit_events) =~ "tracker-secret-token"
+    refute inspect(snapshot.audit_events) =~ "never expose this prompt"
+    refute Map.has_key?(hd(snapshot.audit_events), :settings)
 
     assert [running] = snapshot.running
     assert running.issue.identifier == "SYM-1"

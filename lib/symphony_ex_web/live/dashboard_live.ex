@@ -119,6 +119,7 @@ defmodule SymphonyExWeb.DashboardLive do
      |> assign(:completed_limit_options, @completed_limit_options)
      |> assign(:error_category_options, @error_category_options)
      |> assign(:controls_enabled, controls_enabled?())
+     |> assign(:settings_bounds, RuntimeControl.settings_bounds())
      |> assign_snapshot(current_snapshot())}
   end
 
@@ -441,9 +442,20 @@ defmodule SymphonyExWeb.DashboardLive do
             </dl>
           </section>
 
+          <.runtime_controls_panel
+            snapshot={@snapshot}
+            controls_enabled={@controls_enabled}
+            settings_bounds={@settings_bounds}
+          />
+
           <section style={panel_style()}>
             <h2 style="margin-top: 0; font-size: 20px;">Recent tracker write-back</h2>
             <.write_back_stage_list entries={@snapshot.write_back_stages.recent} empty_message="No tracker write-back activity has been recorded yet." />
+          </section>
+
+          <section style={panel_style()}>
+            <h2 style="margin-top: 0; font-size: 20px;">Recent runtime audit</h2>
+            <.audit_event_list entries={Map.get(@snapshot, :audit_events, [])} />
           </section>
         </div>
       <% else %>
@@ -757,56 +769,20 @@ defmodule SymphonyExWeb.DashboardLive do
               </dl>
             </section>
 
-            <section style={panel_style()}>
-              <h2 style="margin-top: 0; font-size: 20px;">Runtime controls</h2>
-              <p style="margin: 8px 0 12px; color: #6b7280; line-height: 1.5;">
-                Update the `orchestrator` block in `WORKFLOW.md`, reload it into the live runtime,
-                or restart bounded runtime components from this dashboard.
-              </p>
-
-              <%= if @controls_enabled do %>
-                <.form for={%{}} as={:runtime} phx-submit="save_runtime_settings" style="display: grid; gap: 10px;">
-                  <label style={field_label_style()}>
-                    Poll interval (ms)
-                    <input type="number" min="1" name="runtime[poll_interval_ms]" value={@snapshot.settings.poll_interval_ms} style={input_style()} />
-                  </label>
-
-                  <label style={field_label_style()}>
-                    Max concurrent
-                    <input type="number" min="1" name="runtime[max_concurrent]" value={@snapshot.settings.max_concurrent} style={input_style()} />
-                  </label>
-
-                  <label style={field_label_style()}>
-                    Max retries
-                    <input type="number" min="0" name="runtime[max_retries]" value={@snapshot.settings.max_retries} style={input_style()} />
-                  </label>
-
-                  <label style={field_label_style()}>
-                    Retry backoff base (ms)
-                    <input type="number" min="1" name="runtime[backoff_base_ms]" value={@snapshot.settings.retry_backoff_ms} style={input_style()} />
-                  </label>
-
-                  <button type="submit" style={primary_button_style()}>Save settings & reload</button>
-                </.form>
-
-                <div style="display: grid; gap: 8px; margin-top: 14px;">
-                  <button type="button" phx-click="restart_component" phx-value-component="orchestrator" style={secondary_button_style()}>
-                    Restart orchestrator
-                  </button>
-                  <button type="button" phx-click="restart_component" phx-value-component="endpoint" style={secondary_button_style()}>
-                    Restart dashboard endpoint
-                  </button>
-                </div>
-              <% else %>
-                <p style="margin: 8px 0 0; color: #6b7280; line-height: 1.5;">
-                  Runtime controls are disabled. Set `dashboard.controls-enabled: true` explicitly to enable them.
-                </p>
-              <% end %>
-            </section>
+            <.runtime_controls_panel
+              snapshot={@snapshot}
+              controls_enabled={@controls_enabled}
+              settings_bounds={@settings_bounds}
+            />
 
             <section style={panel_style()}>
               <h2 style="margin-top: 0; font-size: 20px;">Recent tracker write-back</h2>
               <.write_back_stage_list entries={@snapshot.write_back_stages.recent} empty_message="No tracker write-back activity has been recorded yet." />
+            </section>
+
+            <section style={panel_style()}>
+              <h2 style="margin-top: 0; font-size: 20px;">Recent runtime audit</h2>
+              <.audit_event_list entries={Map.get(@snapshot, :audit_events, [])} />
             </section>
           </div>
         </div>
@@ -1015,9 +991,173 @@ defmodule SymphonyExWeb.DashboardLive do
     """
   end
 
+  attr(:snapshot, :map, required: true)
+  attr(:controls_enabled, :boolean, required: true)
+  attr(:settings_bounds, :map, required: true)
+
+  defp runtime_controls_panel(assigns) do
+    ~H"""
+    <section style={panel_style()}>
+      <h2 style="margin-top: 0; font-size: 20px;">Runtime controls</h2>
+      <p style="margin: 8px 0 12px; color: #6b7280; line-height: 1.5;">
+        Update the `orchestrator` block in `WORKFLOW.md`, reload it into the live runtime,
+        or restart bounded runtime components from this dashboard.
+      </p>
+
+      <%= if active_runs?(@snapshot) do %>
+        <div id="active-run-restart-warning" role="alert" style="margin-bottom: 12px; padding: 12px; border: 1px solid #fcd34d; border-radius: 10px; background: #fffbeb; color: #92400e; line-height: 1.5;">
+          <strong>Orchestrator restart is blocked while active runs exist.</strong>
+          <div>Active run identifiers: {joined(active_run_identifiers(@snapshot))}</div>
+          <div>Any running entry keeps the orchestrator restart guard in place.</div>
+          <div>force/drain/cancel is unavailable in this milestone.</div>
+        </div>
+      <% else %>
+        <p style="margin: 8px 0 12px; color: #166534; line-height: 1.5;">
+          No active runs are present; orchestrator restart is available.
+        </p>
+      <% end %>
+
+      <%= if @controls_enabled do %>
+        <.form for={%{}} as={:runtime} phx-submit="save_runtime_settings" style="display: grid; gap: 10px;">
+          <label style={field_label_style()}>
+            Poll interval (ms)
+            <input
+              type="number"
+              min={setting_bound(@settings_bounds, :poll_interval_ms, :min)}
+              max={setting_bound(@settings_bounds, :poll_interval_ms, :max)}
+              name="runtime[poll_interval_ms]"
+              value={@snapshot.settings.poll_interval_ms}
+              style={input_style()}
+            />
+            <small style={setting_hint_style()}>Allowed range: {setting_range(@settings_bounds, :poll_interval_ms)} ms.</small>
+          </label>
+
+          <label style={field_label_style()}>
+            Max concurrent
+            <input
+              type="number"
+              min={setting_bound(@settings_bounds, :max_concurrent, :min)}
+              max={setting_bound(@settings_bounds, :max_concurrent, :max)}
+              name="runtime[max_concurrent]"
+              value={@snapshot.settings.max_concurrent}
+              style={input_style()}
+            />
+            <small style={setting_hint_style()}>Allowed range: {setting_range(@settings_bounds, :max_concurrent)}.</small>
+          </label>
+
+          <label style={field_label_style()}>
+            Max retries
+            <input
+              type="number"
+              min={setting_bound(@settings_bounds, :max_retries, :min)}
+              max={setting_bound(@settings_bounds, :max_retries, :max)}
+              name="runtime[max_retries]"
+              value={@snapshot.settings.max_retries}
+              style={input_style()}
+            />
+            <small style={setting_hint_style()}>Allowed range: {setting_range(@settings_bounds, :max_retries)}.</small>
+          </label>
+
+          <label style={field_label_style()}>
+            Retry backoff base (ms)
+            <input
+              type="number"
+              min={setting_bound(@settings_bounds, :backoff_base_ms, :min)}
+              max={setting_bound(@settings_bounds, :backoff_base_ms, :max)}
+              name="runtime[backoff_base_ms]"
+              value={@snapshot.settings.retry_backoff_ms}
+              style={input_style()}
+            />
+            <small style={setting_hint_style()}>Allowed range: {setting_range(@settings_bounds, :backoff_base_ms)} ms.</small>
+          </label>
+
+          <button type="submit" style={primary_button_style()}>Save settings & reload</button>
+        </.form>
+
+        <div style="display: grid; gap: 8px; margin-top: 14px;">
+          <button
+            id="restart-orchestrator-button"
+            type="button"
+            phx-click="restart_component"
+            phx-value-component="orchestrator"
+            disabled={active_runs?(@snapshot)}
+            aria-disabled={to_string(active_runs?(@snapshot))}
+            aria-describedby={if active_runs?(@snapshot), do: "active-run-restart-warning", else: nil}
+            style={if active_runs?(@snapshot), do: disabled_button_style(), else: secondary_button_style()}
+          >
+            Restart orchestrator
+          </button>
+          <button
+            id="restart-endpoint-button"
+            type="button"
+            phx-click="restart_component"
+            phx-value-component="endpoint"
+            style={secondary_button_style()}
+          >
+            Restart dashboard endpoint
+          </button>
+        </div>
+      <% else %>
+        <p style="margin: 8px 0 0; color: #6b7280; line-height: 1.5;">
+          Runtime controls are disabled. Set `dashboard.controls-enabled: true` explicitly to enable them.
+        </p>
+      <% end %>
+    </section>
+    """
+  end
+
+  attr(:entries, :list, required: true)
+
+  defp audit_event_list(assigns) do
+    ~H"""
+    <%= if @entries == [] do %>
+      <p style="margin: 0; color: #6b7280;">No runtime audit events have been recorded yet.</p>
+    <% else %>
+      <div style="display: grid; gap: 8px;">
+        <%= for entry <- @entries do %>
+          <div style="border: 1px solid #e5e7eb; border-radius: 10px; padding: 10px; background: #fff;">
+            <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 4px;">
+              <span style={pill_style(:neutral)}>{present(entry.event)}</span>
+              <%= if entry.active_identifiers != [] do %>
+                <span style={pill_style(:info)}>active: {joined(entry.active_identifiers)}</span>
+              <% end %>
+            </div>
+            <div style="font-size: 13px; color: #374151; line-height: 1.45;">
+              reason: {present(entry.reason)}
+            </div>
+          </div>
+        <% end %>
+      </div>
+    <% end %>
+    """
+  end
+
   defp current_snapshot do
     RuntimeSnapshot.from_orchestrator(orchestrator_server())
   end
+
+  defp active_runs?(snapshot), do: Map.get(snapshot, :running, []) != []
+
+  defp active_run_identifiers(snapshot) do
+    snapshot
+    |> Map.get(:running, [])
+    |> Enum.map(&get_in(&1, [:issue, :identifier]))
+    |> Enum.reject(&is_nil/1)
+    |> Enum.map(&to_string/1)
+    |> Enum.sort()
+  end
+
+  defp setting_bound(bounds, field, bound) do
+    bounds
+    |> Map.fetch!(field)
+    |> Map.fetch!(bound)
+  end
+
+  defp setting_range(bounds, field) do
+    "#{setting_bound(bounds, field, :min)}–#{setting_bound(bounds, field, :max)}"
+  end
+
+  defp setting_hint_style, do: "font-size: 12px; color: #6b7280;"
 
   @spec controls_enabled?() :: boolean()
   defp controls_enabled? do
@@ -1473,6 +1613,10 @@ defmodule SymphonyExWeb.DashboardLive do
     "#{humanize_runtime_field(field)} must be an integer greater than or equal to #{min}."
   end
 
+  defp runtime_control_error({:invalid_setting, field, min, max}) do
+    "#{humanize_runtime_field(field)} must be an integer between #{min} and #{max}."
+  end
+
   defp runtime_control_error({:component_not_running, component}) do
     "#{humanize_component(component)} is not running."
   end
@@ -1645,6 +1789,10 @@ defmodule SymphonyExWeb.DashboardLive do
 
   defp secondary_button_style do
     "appearance: none; border: 1px solid #d1d5db; border-radius: 10px; padding: 10px 14px; background: white; color: #111827; font-weight: 600; cursor: pointer; text-align: left;"
+  end
+
+  defp disabled_button_style do
+    "appearance: none; border: 1px solid #d1d5db; border-radius: 10px; padding: 10px 14px; background: #f3f4f6; color: #9ca3af; font-weight: 600; cursor: not-allowed; text-align: left;"
   end
 
   defp dt_style, do: "font-size: 12px; color: #6b7280;"

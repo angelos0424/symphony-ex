@@ -21,6 +21,12 @@ defmodule SymphonyEx.RuntimeControlTest do
       send(test_pid, :orchestrator_tick)
       {:noreply, test_pid}
     end
+
+    @impl true
+    def handle_call(:reserve_restart, _from, test_pid), do: {:reply, {:ok, make_ref()}, test_pid}
+
+    @impl true
+    def handle_call({:release_restart, _token}, _from, test_pid), do: {:reply, :ok, test_pid}
   end
 
   setup do

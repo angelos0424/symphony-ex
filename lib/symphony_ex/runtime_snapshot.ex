@@ -30,6 +30,12 @@ defmodule SymphonyEx.RuntimeSnapshot do
           recent_events: [log_event()]
         }
 
+  @type audit_event :: %{
+          event: String.t(),
+          active_identifiers: [String.t()],
+          reason: String.t()
+        }
+
   @type session_excerpt :: %{
           path: String.t() | nil,
           exists: boolean(),
@@ -70,7 +76,8 @@ defmodule SymphonyEx.RuntimeSnapshot do
           completed: [completed_entry()],
           completed_issue_identifiers: [String.t()],
           settings: map(),
-          write_back_stages: map()
+          write_back_stages: map(),
+          audit_events: [audit_event()]
         }
 
   @type observer_fingerprint :: integer()
@@ -93,6 +100,7 @@ defmodule SymphonyEx.RuntimeSnapshot do
     retry_queue = retry_entries(state)
     gated = gated_entries(state)
     completed = completed_entries(state)
+    audit_events = safe_audit_events(Map.get(observability, :audit_events, []))
 
     %{
       summary:
@@ -127,7 +135,8 @@ defmodule SymphonyEx.RuntimeSnapshot do
         workflow_path: state.workflow_path,
         automation: automation_status(state)
       },
-      write_back_stages: observability.write_back_stages
+      write_back_stages: observability.write_back_stages,
+      audit_events: audit_events
     }
   end
 
@@ -450,6 +459,29 @@ defmodule SymphonyEx.RuntimeSnapshot do
     |> Map.new()
   end
 
+  @spec safe_audit_events([map()]) :: [audit_event()]
+  defp safe_audit_events(events) do
+    events
+    |> List.wrap()
+    |> Enum.map(&safe_audit_event/1)
+  end
+
+  @spec safe_audit_event(map()) :: audit_event()
+  defp safe_audit_event(event) when is_map(event) do
+    %{
+      event: event |> Map.get(:event) |> to_string(),
+      active_identifiers:
+        event
+        |> Map.get(:active_identifiers, [])
+        |> List.wrap()
+        |> Enum.map(&to_string/1)
+        |> Enum.sort(),
+      reason: event |> Map.get(:reason) |> to_string()
+    }
+  end
+
+  defp safe_audit_event(_event), do: %{event: "", active_identifiers: [], reason: ""}
+
   @spec result_payload(term()) :: map()
   defp result_payload(%{status: status} = result) do
     %{
@@ -674,7 +706,8 @@ defmodule SymphonyEx.RuntimeSnapshot do
         explicit_issue_identifier: nil,
         workflow_path: nil
       },
-      write_back_stages: observability.write_back_stages
+      write_back_stages: observability.write_back_stages,
+      audit_events: safe_audit_events(observability.audit_events)
     }
   end
 
