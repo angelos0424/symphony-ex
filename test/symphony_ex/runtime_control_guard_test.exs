@@ -215,6 +215,24 @@ defmodule SymphonyEx.RuntimeControlGuardTest do
              RuntimeControl.restart_component(:orchestrator, orchestrator: legacy)
   end
 
+  test "releases the reservation when the restart path exits" do
+    {_supervisor, orchestrator, workflow_path} = start_runtime([])
+
+    exit_reason =
+      catch_exit(
+        RuntimeControl.restart_component(
+          :orchestrator,
+          workflow_path: workflow_path,
+          orchestrator: orchestrator,
+          supervisor: self()
+        )
+      )
+
+    assert match?({:calling_self, _details}, exit_reason)
+    assert {:ok, token} = Orchestrator.reserve_restart(orchestrator)
+    assert :ok = Orchestrator.release_restart(orchestrator, token)
+  end
+
   test "restarts an idle orchestrator child while preserving endpoint independence" do
     {orchestrator_supervisor, orchestrator, workflow_path} = start_runtime([])
     old_orchestrator_pid = Process.whereis(orchestrator)

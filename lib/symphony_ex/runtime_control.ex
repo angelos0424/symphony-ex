@@ -36,9 +36,11 @@ defmodule SymphonyEx.RuntimeControl do
 
     case reserve_orchestrator(orchestrator) do
       {:ok, token} ->
-        result = restart_component_without_guard(:orchestrator, opts)
-        _ = release_orchestrator(orchestrator, token)
-        result
+        try do
+          restart_component_without_guard(:orchestrator, opts)
+        after
+          release_orchestrator(orchestrator, token)
+        end
 
       {:error, {:active_runs, identifiers}} = error ->
         :ok =
@@ -77,14 +79,18 @@ defmodule SymphonyEx.RuntimeControl do
         server
 
       :error ->
-        if Process.whereis(Orchestrator) do
-          Orchestrator
-        else
-          discover_orchestrator_server(Keyword.get(opts, :supervisor, @supervisor)) ||
-            Orchestrator
+        case Keyword.fetch(opts, :supervisor) do
+          {:ok, supervisor} ->
+            discover_orchestrator_server(supervisor) || registered_orchestrator() || Orchestrator
+
+          :error ->
+            registered_orchestrator() || discover_orchestrator_server(@supervisor) || Orchestrator
         end
     end
   end
+
+  @spec registered_orchestrator() :: atom() | pid() | nil
+  defp registered_orchestrator, do: Process.whereis(Orchestrator)
 
   @spec discover_orchestrator_server(Supervisor.supervisor()) :: pid() | nil
   defp discover_orchestrator_server(supervisor) do
