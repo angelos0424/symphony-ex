@@ -37,11 +37,13 @@ defmodule SymphonyEx.Observability do
           write_back_stages: %{
             recent: [write_back_stage_event()],
             by_issue: %{optional(String.t()) => [write_back_stage_event()]}
-          }
+          },
+          audit_events: [map()]
         }
 
   @recent_write_back_limit 20
   @per_issue_write_back_limit 10
+  @audit_event_limit 50
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
@@ -91,6 +93,17 @@ defmodule SymphonyEx.Observability do
     end
   end
 
+  @spec record_audit_event(map()) :: :ok
+  def record_audit_event(event) when is_map(event) do
+    case Process.whereis(__MODULE__) do
+      nil ->
+        :ok
+
+      _pid ->
+        GenServer.call(__MODULE__, {:record_audit_event, event})
+    end
+  end
+
   @spec reset() :: :ok
   def reset do
     case Process.whereis(__MODULE__) do
@@ -111,6 +124,15 @@ defmodule SymphonyEx.Observability do
 
   def handle_call({:write_back_stage_events, issue_identifier}, _from, state) do
     {:reply, get_in(state, [:write_back_stages, :by_issue, issue_identifier]) || [], state}
+  end
+
+  def handle_call({:record_audit_event, event}, _from, state) do
+    state =
+      update_in(state, [:audit_events], fn events ->
+        [normalize_audit_event(event) | List.wrap(events)] |> Enum.take(@audit_event_limit)
+      end)
+
+    {:reply, :ok, state}
   end
 
   def handle_call(:reset, _from, _state), do: {:reply, :ok, initial_state()}
@@ -142,13 +164,15 @@ defmodule SymphonyEx.Observability do
   defp initial_state do
     %{
       rate_limits: %{},
-      write_back_stages: %{recent: [], by_issue: %{}}
+      write_back_stages: %{recent: [], by_issue: %{}},
+      audit_events: []
     }
   end
 
   @spec snapshot_from_state(state()) :: %{
           rate_limits: map(),
-          write_back_stages: write_back_stage_snapshot()
+          write_back_stages: write_back_stage_snapshot(),
+          audit_events: [map()]
         }
   defp snapshot_from_state(state) do
     recent = get_in(state, [:write_back_stages, :recent]) || []
@@ -158,7 +182,22 @@ defmodule SymphonyEx.Observability do
       write_back_stages: %{
         recent: recent,
         alert_count: Enum.count(recent, &(&1.outcome != "success"))
-      }
+      },
+      audit_events: Map.get(state, :audit_events, [])
+    }
+  end
+
+  @spec normalize_audit_event(map()) :: map()
+  defp normalize_audit_event(event) do
+    %{
+      event: event |> Map.get(:event) |> to_string(),
+      active_identifiers:
+        event
+        |> Map.get(:active_identifiers, [])
+        |> List.wrap()
+        |> Enum.map(&to_string/1)
+        |> Enum.sort(),
+      reason: event |> Map.get(:reason) |> to_string()
     }
   end
 

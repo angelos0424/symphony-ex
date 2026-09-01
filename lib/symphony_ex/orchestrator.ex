@@ -100,7 +100,8 @@ defmodule SymphonyEx.Orchestrator do
           last_runtime_snapshot_fingerprint: integer() | nil,
           candidate_poll_interval_ms: pos_integer(),
           next_candidate_poll_at_ms: integer(),
-          next_candidate_poll_at_system_ms: integer()
+          next_candidate_poll_at_system_ms: integer(),
+          restart_reservation: reference() | nil
         }
 
   @default_blocked_labels ["blocked", "human-blocked", "needs-human", "do-not-dispatch"]
@@ -126,6 +127,29 @@ defmodule SymphonyEx.Orchestrator do
 
   @spec snapshot(GenServer.server()) :: state()
   def snapshot(server \\ __MODULE__), do: GenServer.call(server, :snapshot)
+
+  @doc "Returns sorted identifiers for currently running issues."
+  @spec active_run_identifiers(GenServer.server()) :: [String.t()]
+  def active_run_identifiers(server \\ __MODULE__),
+    do: GenServer.call(server, :active_run_identifiers)
+
+  @doc "Alias for active_run_identifiers/1."
+  @spec active_identifiers(GenServer.server()) :: [String.t()]
+  def active_identifiers(server \\ __MODULE__), do: active_run_identifiers(server)
+
+  @doc "Returns safe summaries for currently running issues."
+  @spec active_runs(GenServer.server()) :: [map()]
+  def active_runs(server \\ __MODULE__), do: GenServer.call(server, :active_runs)
+
+  @doc "Reserves an idle orchestrator for a restart."
+  @spec reserve_restart(GenServer.server()) ::
+          {:ok, reference()} | {:error, {:active_runs, [String.t()]} | :restart_reserved}
+  def reserve_restart(server \\ __MODULE__), do: GenServer.call(server, :reserve_restart)
+
+  @doc "Releases a restart reservation without affecting a newer reservation."
+  @spec release_restart(GenServer.server(), reference()) :: :ok
+  def release_restart(server \\ __MODULE__, token),
+    do: GenServer.call(server, {:release_restart, token})
 
   @impl true
   def init(opts) do
@@ -183,7 +207,8 @@ defmodule SymphonyEx.Orchestrator do
       last_runtime_snapshot_fingerprint: nil,
       candidate_poll_interval_ms: poll_interval_ms,
       next_candidate_poll_at_ms: now_mono_ms,
-      next_candidate_poll_at_system_ms: now_system_ms
+      next_candidate_poll_at_system_ms: now_system_ms,
+      restart_reservation: nil
     }
 
     send(self(), :tick)
@@ -192,6 +217,46 @@ defmodule SymphonyEx.Orchestrator do
 
   @impl true
   def handle_call(:snapshot, _from, state), do: {:reply, state, state}
+
+  @impl true
+  def handle_call(:active_run_identifiers, _from, state) do
+    {:reply, active_identifiers_from_state(state), state}
+  end
+
+  def handle_call(:active_runs, _from, state) do
+    {:reply, active_run_summaries(state), state}
+  end
+
+  def handle_call(:reserve_restart, _from, %{restart_reservation: token} = state)
+      when not is_nil(token) do
+    {:reply, {:error, :restart_reserved}, state}
+  end
+
+  def handle_call(:reserve_restart, _from, state) do
+    case active_identifiers_from_state(state) do
+      [] ->
+        token = make_ref()
+        {:reply, {:ok, token}, Map.put(state, :restart_reservation, token)}
+
+      identifiers ->
+        {:reply, {:error, {:active_runs, identifiers}}, state}
+    end
+  end
+
+  def handle_call({:release_restart, token}, _from, state) do
+    state =
+      if Map.get(state, :restart_reservation) == token,
+        do: Map.put(state, :restart_reservation, nil),
+        else: state
+
+    {:reply, :ok, state}
+  end
+
+  @impl true
+  def handle_info(:tick, %{restart_reservation: token} = state) when not is_nil(token) do
+    Process.send_after(self(), :tick, state.poll_interval_ms)
+    {:noreply, state}
+  end
 
   @impl true
   def handle_info(:tick, state) do
@@ -1115,6 +1180,30 @@ defmodule SymphonyEx.Orchestrator do
     opts
     |> Keyword.get(:serialization_label_prefixes, @default_serialization_label_prefixes)
     |> Enum.map(&normalize_label/1)
+  end
+
+  @spec active_identifiers_from_state(state()) :: [String.t()]
+  defp active_identifiers_from_state(state) do
+    state.running
+    |> Map.keys()
+    |> Enum.map(&to_string/1)
+    |> Enum.sort()
+  end
+
+  @spec active_run_summaries(state()) :: [map()]
+  defp active_run_summaries(state) do
+    state.running
+    |> Map.values()
+    |> Enum.map(fn entry ->
+      %{
+        identifier: entry.issue.identifier,
+        state: entry.state,
+        attempt: entry.attempt,
+        workspace_path: entry.workspace_path,
+        task: %{state: entry.state}
+      }
+    end)
+    |> Enum.sort_by(& &1.identifier)
   end
 
   @spec available_slots(state()) :: non_neg_integer()

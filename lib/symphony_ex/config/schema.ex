@@ -4,6 +4,8 @@ defmodule SymphonyEx.Config.Schema do
   Parses WORKFLOW.md YAML front matter and environment variables.
   """
 
+  alias SymphonyEx.Config.Bounds
+
   @lifecycle_state_schema [
     type: :keyword_list,
     default: [],
@@ -223,10 +225,22 @@ defmodule SymphonyEx.Config.Schema do
               default: [],
               keys: [
                 issue_identifier: [type: :string],
-                poll_interval_ms: [type: :pos_integer, default: 30_000],
-                max_concurrent: [type: :pos_integer, default: 1],
-                max_retries: [type: :non_neg_integer, default: 3],
-                backoff_base_ms: [type: :pos_integer, default: 60_000],
+                poll_interval_ms: [
+                  type: {:custom, __MODULE__, :validate_runtime_integer, [:poll_interval_ms]},
+                  default: 30_000
+                ],
+                max_concurrent: [
+                  type: {:custom, __MODULE__, :validate_runtime_integer, [:max_concurrent]},
+                  default: 1
+                ],
+                max_retries: [
+                  type: {:custom, __MODULE__, :validate_runtime_integer, [:max_retries]},
+                  default: 3
+                ],
+                backoff_base_ms: [
+                  type: {:custom, __MODULE__, :validate_runtime_integer, [:backoff_base_ms]},
+                  default: 60_000
+                ],
                 concurrency_limits: [type: :any, default: []]
               ]
             ],
@@ -258,6 +272,22 @@ defmodule SymphonyEx.Config.Schema do
 
   @spec schema() :: NimbleOptions.t()
   def schema, do: @schema
+
+  @doc "Returns the shared safety bounds for runtime orchestrator settings."
+  @spec runtime_bounds() :: map()
+  def runtime_bounds, do: Bounds.bounds()
+
+  @doc false
+  @spec validate_runtime_integer(term(), atom()) :: {:ok, integer()} | {:error, String.t()}
+  def validate_runtime_integer(value, field) when is_atom(field) do
+    %{min: min, max: max} = Map.fetch!(runtime_bounds(), field)
+
+    if is_integer(value) and value >= min and value <= max do
+      {:ok, value}
+    else
+      {:error, "expected #{field} to be an integer in #{min}..#{max}, got: #{inspect(value)}"}
+    end
+  end
 
   @spec validate!(keyword()) :: keyword()
   def validate!(opts) do

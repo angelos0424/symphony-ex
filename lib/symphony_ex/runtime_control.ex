@@ -3,11 +3,16 @@ defmodule SymphonyEx.RuntimeControl do
   Bounded runtime control surface for dashboard-triggered apply/reload/restart actions.
   """
 
-  alias SymphonyEx.{WorkflowEditor, WorkflowStore}
+  alias SymphonyEx.{Observability, Orchestrator, WorkflowEditor, WorkflowStore}
+  alias SymphonyEx.Config.Bounds
 
   @supervisor SymphonyEx.Supervisor
 
   @type component :: :orchestrator | :endpoint
+
+  @doc "Returns the shared safety bounds for runtime orchestrator settings."
+  @spec settings_bounds() :: map()
+  def settings_bounds, do: Bounds.bounds()
 
   @spec apply_orchestrator_settings(map(), keyword()) ::
           {:ok, %{workflow_path: String.t(), settings: map()}} | {:error, term()}
@@ -22,13 +27,99 @@ defmodule SymphonyEx.RuntimeControl do
     end
   end
 
+  @spec restart_component(component()) :: {:ok, component()} | {:error, term()}
+  def restart_component(component), do: restart_component(component, [])
+
   @spec restart_component(component(), keyword()) :: {:ok, component()} | {:error, term()}
-  def restart_component(component, opts \\ []) when component in [:orchestrator, :endpoint] do
+  def restart_component(:orchestrator, opts) do
+    orchestrator = orchestrator_server(opts)
+
+    case reserve_orchestrator(orchestrator) do
+      {:ok, token} ->
+        result = restart_component_without_guard(:orchestrator, opts)
+        _ = release_orchestrator(orchestrator, token)
+        result
+
+      {:error, {:active_runs, identifiers}} = error ->
+        :ok =
+          Observability.record_audit_event(%{
+            event: "orchestrator_restart_rejected",
+            active_identifiers: identifiers,
+            reason: "active_runs"
+          })
+
+        error
+
+      :unsupported ->
+        restart_component_without_guard(:orchestrator, opts)
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  def restart_component(:endpoint, opts) do
+    restart_component_without_guard(:endpoint, opts)
+  end
+
+  @spec restart_component_without_guard(component(), keyword()) ::
+          {:ok, component()} | {:error, term()}
+  defp restart_component_without_guard(component, opts) do
     with {:ok, workflow_path} <- workflow_path(opts),
          {:ok, _config} <- reconfigure_runtime(workflow_path),
          :ok <- maybe_reload_workflow_store(component, opts),
          :ok <- restart_child(component, Keyword.get(opts, :supervisor, @supervisor)) do
       {:ok, component}
+    end
+  end
+
+  @spec orchestrator_server(keyword()) :: GenServer.server()
+  defp orchestrator_server(opts) do
+    case Keyword.fetch(opts, :orchestrator) do
+      {:ok, server} ->
+        server
+
+      :error ->
+        if Process.whereis(Orchestrator) do
+          Orchestrator
+        else
+          discover_orchestrator_server(Keyword.get(opts, :supervisor, @supervisor)) ||
+            Orchestrator
+        end
+    end
+  end
+
+  @spec discover_orchestrator_server(Supervisor.supervisor()) :: pid() | nil
+  defp discover_orchestrator_server(supervisor) do
+    supervisor
+    |> Supervisor.which_children()
+    |> Enum.find_value(fn
+      {Orchestrator, pid, _type, _modules} when is_pid(pid) -> pid
+      _child -> nil
+    end)
+  catch
+    :exit, _reason -> nil
+  end
+
+  @spec reserve_orchestrator(GenServer.server()) ::
+          {:ok, reference()} | {:error, term()} | :unsupported
+  defp reserve_orchestrator(server) do
+    try do
+      Orchestrator.reserve_restart(server)
+    catch
+      :exit, {{:function_clause, _stacktrace}, _call} -> :unsupported
+      :exit, {:noproc, _call} -> {:error, {:component_not_running, :orchestrator}}
+      :exit, reason -> {:error, reason}
+    end
+  end
+
+  @spec release_orchestrator(GenServer.server(), reference()) :: :ok
+  defp release_orchestrator(server, token) do
+    try do
+      _ = Orchestrator.release_restart(server, token)
+      :ok
+    catch
+      :exit, _reason -> :ok
     end
   end
 
@@ -59,12 +150,12 @@ defmodule SymphonyEx.RuntimeControl do
   @spec normalize_orchestrator_settings(map()) :: {:ok, map()} | {:error, term()}
   defp normalize_orchestrator_settings(params) do
     with {:ok, poll_interval_ms} <-
-           parse_integer(params["poll_interval_ms"], :poll_interval_ms, min: 1),
+           parse_integer(params["poll_interval_ms"], :poll_interval_ms),
          {:ok, max_concurrent} <-
-           parse_integer(params["max_concurrent"], :max_concurrent, min: 1),
-         {:ok, max_retries} <- parse_integer(params["max_retries"], :max_retries, min: 0),
+           parse_integer(params["max_concurrent"], :max_concurrent),
+         {:ok, max_retries} <- parse_integer(params["max_retries"], :max_retries),
          {:ok, backoff_base_ms} <-
-           parse_integer(params["backoff_base_ms"], :backoff_base_ms, min: 1) do
+           parse_integer(params["backoff_base_ms"], :backoff_base_ms) do
       {:ok,
        %{
          poll_interval_ms: poll_interval_ms,
@@ -75,13 +166,13 @@ defmodule SymphonyEx.RuntimeControl do
     end
   end
 
-  @spec parse_integer(term(), atom(), keyword()) :: {:ok, integer()} | {:error, term()}
-  defp parse_integer(value, field, opts) do
-    min = Keyword.get(opts, :min, 0)
+  @spec parse_integer(term(), atom()) :: {:ok, integer()} | {:error, term()}
+  defp parse_integer(value, field) do
+    %{min: min, max: max} = Map.fetch!(settings_bounds(), field)
 
     case Integer.parse(to_string(value || "")) do
-      {parsed, ""} when parsed >= min -> {:ok, parsed}
-      _other -> {:error, {:invalid_setting, field, min}}
+      {parsed, ""} when parsed >= min and parsed <= max -> {:ok, parsed}
+      _other -> {:error, {:invalid_setting, field, min, max}}
     end
   end
 

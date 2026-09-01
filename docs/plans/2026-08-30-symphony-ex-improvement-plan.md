@@ -83,7 +83,7 @@ git worktree prune --dry-run
 - 구현/리뷰/merge: 완료
 - merge commit: `b31dfe93389545fd7914b2f0acd2c56300f9c42d`
 - main 검증: `b31dfe93389545fd7914b2f0acd2c56300f9c42d`에서 focused `43 tests/0 failures`, full `243 tests/0 failures`, format/shell/Compose PASS; GitHub Actions workflow 없음
-- 다음 정확한 작업: `PR-2 / CTRL-01`을 새 GitHub Issue로 등록하고 Issue 기준 branch에서 구현 시작
+- 현재 정확한 작업: `PR-2 / CTRL-01` Issue #42 구현을 Issue 기준 branch에서 시작
 
 PR-2 이후 구현 Task는 `Todo`이며, 각 Task는 Issue와 branch를 만든 뒤 순차적으로 pick한다.
 
@@ -114,9 +114,11 @@ PR-2 이후 구현 Task는 `Todo`이며, 각 Task는 Issue와 branch를 만든 �
 
 현재 다음 작업:
 
-- `PR-2 / CTRL-01` — **Todo**
+- `PR-2 / CTRL-01` — **Picked Up**
+- Issue: [#42](https://github.com/angelos0424/symphony-ex/issues/42)
+- Branch: `issue-42-active-run-restart-guard`
 - Objective: active-run 중 orchestrator restart fail-closed guard
-- 다음 action: GitHub Issue 등록 후 Issue 기준 branch에서 구현 시작
+- 다음 action: active-run guard/snapshot/schema를 먼저 구현하고 dashboard UX·audit를 연결
 
 ## 3. 설계 원칙
 
