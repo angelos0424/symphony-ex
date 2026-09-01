@@ -114,13 +114,14 @@ PR-2 이후 구현 Task는 `Todo`이며, 각 Task는 Issue와 branch를 만든 �
 
 현재 다음 작업:
 
-- `PR-2 / CTRL-01·02·03` — **In Review**
+- `PR-2 / CTRL-01·02·03` — **Done**
 - Issue: [#42](https://github.com/angelos0424/symphony-ex/issues/42)
-- Branch: `issue-42-active-run-restart-guard`
-- Checkpoints: core `5c7f0d500a26aa42577b27f6cec4a70827af68cf`, UI/audit `097b32b0894008ce0a54bed335673a92c6d67bce`, fail-closed follow-up `e1928a63926300a1955776ed5a59b43f61ae6d73`, exception-safe release follow-up pending commit
+- PR: [#43](https://github.com/angelos0424/symphony-ex/pull/43)
+- Merge commit: `543e20b881a220889a797c39abe77d9bab069780`; feature branch merged and deleted
+- Checkpoints: core `5c7f0d500a26aa42577b27f6cec4a70827af68cf`, UI/audit `097b32b0894008ce0a54bed335673a92c6d67bce`, fail-closed follow-up `e1928a63926300a1955776ed5a59b43f61ae6d73`, final `1f435b1588ca282914db38e01396048cf8e15bac`
 - Objective: active-run 중 orchestrator restart fail-closed guard와 bounded settings/audit UX
-- Verification: full `259 tests/0 failures`, guard/bounds/runtime-control `9/9`, dashboard `11/11`, snapshot/API `7/7`, format/diff PASS
-- 다음 action: exact-SHA spec/quality review 후 PR 생성 및 원격 검증
+- Verification: main post-merge full `259 tests/0 failures`, guard/bounds/runtime-control `9/9`, dashboard `11/11`, snapshot/API `7/7`, format/diff PASS; exact-SHA spec PASS and quality/security APPROVED (Critical/Important/Minor 0)
+- 다음 action: PR-3 / LIFE-01·02 issue/branch를 만든 뒤 실패 lifecycle·재실행 의미를 구현
 
 ## 3. 설계 원칙
 
@@ -165,9 +166,9 @@ PR-2 이후 구현 Task는 `Todo`이며, 각 Task는 Issue와 branch를 만든 �
 | TRUST-02-FU | Done | PR-1A-FU | `Gated only` dashboard queue filter | `dashboard_live.ex`, dashboard tests |
 | TRUST-03 | Done | PR-1B | Agent/orchestrator token 분리 | `config.ex`, `github/client.ex`, app-server, Docker env/entrypoint |
 | TRUST-04 | Done | PR-1C | Non-root container·sandbox·health migration | `Dockerfile`, Compose, workflows |
-| CTRL-01 | In Review | PR-2 | Active-run restart guard | `runtime_control.ex`, `orchestrator.ex` |
-| CTRL-02 | In Review | PR-2 | Active-run restart 거부 UX·audit | `dashboard_live.ex`, `runtime_snapshot.ex` |
-| CTRL-03 | In Review | PR-2 | 설정 상한·확인 UX | `runtime_control.ex`, dashboard tests |
+| CTRL-01 | Done | PR-2 | Active-run restart guard | `runtime_control.ex`, `orchestrator.ex` |
+| CTRL-02 | Done | PR-2 | Active-run restart 거부 UX·audit | `dashboard_live.ex`, `runtime_snapshot.ex` |
+| CTRL-03 | Done | PR-2 | 설정 상한·확인 UX | `runtime_control.ex`, dashboard tests |
 | LIFE-01 | Todo | PR-3 | 실패 release와 completed 의미 분리 | `orchestrator.ex`, lifecycle tests |
 | LIFE-02 | Todo | PR-3 | `Retry now/Stop retrying/Resume` API contract | `runtime_control.ex`, API/LiveView |
 | WB-01 | Todo | PR-4 | Essential write-back 완료 gate | `orchestrator.ex`, `github/adapter.ex` |
