@@ -63,6 +63,15 @@ defmodule SymphonyEx.RuntimeControlGuardTest do
     end
   end
 
+  defmodule LegacyOrchestrator do
+    use GenServer
+
+    def start_link(_opts), do: GenServer.start_link(__MODULE__, :ok)
+
+    @impl true
+    def init(state), do: {:ok, state}
+  end
+
   setup do
     ensure_observability_started()
     Observability.reset()
@@ -197,6 +206,13 @@ defmodule SymphonyEx.RuntimeControlGuardTest do
 
     assert {:ok, token} = Orchestrator.reserve_restart(orchestrator)
     assert :ok = Orchestrator.release_restart(orchestrator, token)
+  end
+
+  test "fails closed when the orchestrator restart guard is unavailable" do
+    {:ok, legacy} = start_supervised({LegacyOrchestrator, []})
+
+    assert {:error, {:restart_guard_unavailable, :orchestrator}} =
+             RuntimeControl.restart_component(:orchestrator, orchestrator: legacy)
   end
 
   test "restarts an idle orchestrator child while preserving endpoint independence" do

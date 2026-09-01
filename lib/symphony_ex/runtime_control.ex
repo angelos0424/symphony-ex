@@ -50,9 +50,6 @@ defmodule SymphonyEx.RuntimeControl do
 
         error
 
-      :unsupported ->
-        restart_component_without_guard(:orchestrator, opts)
-
       {:error, _reason} = error ->
         error
     end
@@ -102,14 +99,13 @@ defmodule SymphonyEx.RuntimeControl do
   end
 
   @spec reserve_orchestrator(GenServer.server()) ::
-          {:ok, reference()} | {:error, term()} | :unsupported
+          {:ok, reference()} | {:error, term()}
   defp reserve_orchestrator(server) do
     try do
       Orchestrator.reserve_restart(server)
     catch
-      :exit, {{:function_clause, _stacktrace}, _call} -> :unsupported
       :exit, {:noproc, _call} -> {:error, {:component_not_running, :orchestrator}}
-      :exit, reason -> {:error, reason}
+      :exit, _reason -> {:error, {:restart_guard_unavailable, :orchestrator}}
     end
   end
 
