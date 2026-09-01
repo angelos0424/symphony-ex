@@ -4,6 +4,7 @@ defmodule SymphonyEx.Deploy.DockerHardeningTest do
   @repo_root Path.expand("../..", __DIR__)
   @docker_dir Path.join(@repo_root, "deploy/docker")
   @config_file Path.join(@repo_root, "config/config.exs")
+  @runtime_canary Path.join(__DIR__, "docker_hardening_runtime.sh")
   @compose_files ~w(
     docker-compose.repo-a.yml
     docker-compose.repo-b.yml
@@ -21,7 +22,8 @@ defmodule SymphonyEx.Deploy.DockerHardeningTest do
 
     assert dockerfile =~ "USER symphony"
     assert dockerfile =~ "HEALTHCHECK"
-    assert dockerfile =~ "/proc/1/comm"
+    assert dockerfile =~ "/proc/[0-9]*/comm"
+    refute dockerfile =~ "/proc/1/comm"
     refute dockerfile =~ "SYMPHONY_DASHBOARD"
   end
 
@@ -36,6 +38,7 @@ defmodule SymphonyEx.Deploy.DockerHardeningTest do
 
     assert entrypoint =~ "/run/host-codex/auth.json"
     assert entrypoint =~ "/run/host-codex/config.toml"
+    assert entrypoint =~ "not readable by runtime UID"
     assert entrypoint =~ "CODEX_HOME"
     assert entrypoint =~ "/.codex}"
     refute entrypoint =~ "cp -a /run/host-codex/."
@@ -64,6 +67,15 @@ defmodule SymphonyEx.Deploy.DockerHardeningTest do
       assert workflow =~ "thread-sandbox: workspaceWrite", file
       refute workflow =~ "thread-sandbox: dangerFullAccess", file
     end
+  end
+
+  test "runtime canary covers Compose init and private credential inputs" do
+    canary = File.read!(@runtime_canary)
+
+    assert canary =~ "--init"
+    assert canary =~ "stat -c %a"
+    assert canary =~ "mode=%s uid=%s gid=%s"
+    assert canary =~ "health=healthy"
   end
 
   defp read!(relative_path) do

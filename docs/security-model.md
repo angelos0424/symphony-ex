@@ -82,16 +82,20 @@ not gain root or `CAP_CHOWN` to repair ownership.
 
 Compose sets `no-new-privileges`, drops every Linux capability, and bounds PIDs,
 CPU, and memory. Only host Codex `auth.json` and `config.toml` are exposed as
-individual read-only bind mounts. The entrypoint installs private copies into
-`/home/symphony/.codex`; history, sessions, skills, logs, and other host Codex
-files are outside the container boundary.
+individual read-only bind mounts from a private host staging directory owned by
+UID 10001. The original host-login-owned mode `0600` files are copied into that
+directory with `sudo install`; they are never made group/world-readable. The
+entrypoint fails fast if an input is unreadable, then installs private copies
+into `/home/symphony/.codex`. History, sessions, skills, logs, and other host
+Codex files are outside the container boundary.
 
 The default Codex sandbox is `workspaceWrite`. A `dangerFullAccess` override is
 an explicit per-repository exception that must document why workspace write is
 insufficient, its affected paths, compensating controls, and rollback. It must
 not be applied globally across workflow variants.
 
-Docker health proves dashboard-independent BEAM process liveness only. Tracker
+Docker health scans `/proc` for BEAM so it remains valid when `docker-init` is
+PID 1. It proves dashboard-independent process liveness only. Tracker
 readiness is a separate freshness decision based on a recent successful poll,
 current GitHub auth/rate-limit state, and source access. A healthy container must
 not be interpreted as tracker-ready, and the optional dashboard is not a

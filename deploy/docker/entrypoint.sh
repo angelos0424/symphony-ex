@@ -69,9 +69,17 @@ chmod 700 "$codex_home"
 # Stage an explicit allowlist. Never copy the host Codex directory recursively.
 rm -f "$codex_home/auth.json" "$codex_home/config.toml"
 if [ -f /run/host-codex/auth.json ]; then
+  if [ ! -r /run/host-codex/auth.json ]; then
+    echo "Codex auth input is not readable by runtime UID $(id -u); stage a private UID-compatible copy" >&2
+    exit 1
+  fi
   install -m 0600 /run/host-codex/auth.json "$codex_home/auth.json"
 fi
 if [ -f /run/host-codex/config.toml ]; then
+  if [ ! -r /run/host-codex/config.toml ]; then
+    echo "Codex config input is not readable by runtime UID $(id -u); stage a private UID-compatible copy" >&2
+    exit 1
+  fi
   install -m 0600 /run/host-codex/config.toml "$codex_home/config.toml"
 fi
 

@@ -112,6 +112,8 @@ PR-1C를 제외한 이후 구현 Task는 `Todo`이며, 각 Task는 Issue와 bran
 - PR: pending (구현 branch에서는 GitHub 상태를 변경하지 않음)
 - Objective: non-root container·sandbox·health migration
 - 구현 범위: non-root UID 10001, Codex auth/config allowlist, `workspaceWrite`, Compose least privilege/resource limits, BEAM liveness, volume migration/rollback 문서
+- 검증: focused `6 tests/0 failures`, full `249 tests/0 failures`, format/shell/Compose 3종 PASS, `docker-init` PID 1 + private mode-0600 credential runtime canary PASS
+- 독립 review: SHA `19a9dd9`의 liveness/credential-input finding 2건 수정 완료, 새 exact SHA 재검토 대기
 - 다음 action: exact branch SHA 독립 spec/security review 후 PR 생성·CI 확인
 
 ## 3. 설계 원칙

@@ -56,5 +56,10 @@ ENV ELIXIR_ERL_OPTIONS=+fnu
 
 USER symphony:symphony
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD test -r /proc/1/comm && grep -Eq '^beam(\.smp)?$' /proc/1/comm && kill -0 1
+  CMD for comm in /proc/[0-9]*/comm; do \
+        [ -r "$comm" ] || continue; \
+        if grep -Eq '^beam(\.smp)?$' "$comm"; then \
+          pid="${comm#/proc/}"; pid="${pid%/comm}"; kill -0 "$pid" && exit 0; \
+        fi; \
+      done; exit 1
 ENTRYPOINT ["/usr/local/bin/symphony-entrypoint"]

@@ -81,7 +81,7 @@ cp env/repo-a.env.example env/repo-a.env
 cp env/repo-b.env.example env/repo-b.env
 cp env/repo-c.env.example env/repo-c.env
 
-# Point SYMPHONY_CODEX_HOME in .env at the absolute host Codex directory.
+# First stage private UID-10001 copies as documented in deploy/docker/README.md.
 docker compose --env-file .env -f docker-compose.repo-a.yml config
 docker compose --env-file .env -f docker-compose.repo-b.yml config
 docker compose --env-file .env -f docker-compose.repo-c.yml config
@@ -94,7 +94,8 @@ in `deploy/docker/README.md`. The non-root entrypoint intentionally never
 ownership to `0:0` only if the previous runtime actually requires it, and never
 restore privileged capabilities or a whole-host-Codex-home mount.
 
-Docker health is **liveness only**: PID 1 must be the live BEAM process.
+Docker health is **liveness only**: it finds a live BEAM process even when
+Compose `init: true` makes `docker-init` PID 1.
 Tracker-freshness readiness is separate and requires a recent successful GitHub
 poll, no current auth/rate-limit failure, and usable source access. Until there
 is a stable readiness endpoint, assess freshness through structured logs and

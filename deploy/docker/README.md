@@ -48,14 +48,31 @@ cp env/repo-b.env.example env/repo-b.env
 cp env/repo-c.env.example env/repo-c.env
 ```
 
-Edit `.env` so `SYMPHONY_CODEX_HOME` is the absolute host directory containing
-Codex `auth.json` and `config.toml`. Compose binds those two files individually;
-it never exposes the rest of the host Codex tree. Both source files must exist
-before `compose up` (an empty `config.toml` is valid if no override is needed):
+Do not bind the original host `~/.codex` files directly. A mode `0600` file
+owned by the host login is intentionally unreadable to container UID 10001.
+Stage private copies owned by the runtime UID, then point `SYMPHONY_CODEX_HOME`
+in `.env` at that directory. Compose binds only these two files and never
+exposes the rest of the host Codex tree:
 
 ```bash
-install -m 600 /dev/null "$HOME/.codex/config.toml"  # only when absent
+sudo install -d -o 10001 -g 10001 -m 0700 /var/lib/symphony/codex
+sudo install -o 10001 -g 10001 -m 0600 \
+  "$HOME/.codex/auth.json" /var/lib/symphony/codex/auth.json
+
+if [ -f "$HOME/.codex/config.toml" ]; then
+  sudo install -o 10001 -g 10001 -m 0600 \
+    "$HOME/.codex/config.toml" /var/lib/symphony/codex/config.toml
+else
+  sudo install -o 10001 -g 10001 -m 0600 \
+    /dev/null /var/lib/symphony/codex/config.toml
+fi
+
+printf 'SYMPHONY_CODEX_HOME=/var/lib/symphony/codex\n' > .env
 ```
+
+Repeat the two `sudo install` copy steps whenever Codex OAuth or configuration
+changes. Never make credential inputs group/world-readable. The entrypoint fails
+before boot with the runtime UID when a mounted input exists but is unreadable.
 
 Set `GITHUB_TRACKER_TOKEN` and the repo-scoped `GITHUB_AGENT_TOKEN` in ignored
 `env/common.env`. The entrypoint resolves only the agent token at Git credential
@@ -115,9 +132,10 @@ Replace `repo-c` with `repo-a` or `repo-b` as needed.
 
 ## Liveness versus readiness
 
-Docker `HEALTHCHECK` verifies only that PID 1 is the live BEAM runtime. It does
-not use Phoenix and remains valid when the dashboard is disabled. A `healthy`
-container therefore means **process live**, not **tracker ready**.
+Docker `HEALTHCHECK` scans `/proc` for a live BEAM runtime. This remains correct
+when Compose `init: true` makes `docker-init` PID 1, does not use Phoenix, and
+works when the dashboard is disabled. A `healthy` container therefore means
+**process live**, not **tracker ready**.
 
 Tracker-freshness readiness is an operator-level condition: require a recent
 successful GitHub poll within the repository's configured poll interval plus an
