@@ -1,0 +1,74 @@
+defmodule SymphonyEx.Deploy.DockerHardeningTest do
+  use ExUnit.Case, async: true
+
+  @repo_root Path.expand("../..", __DIR__)
+  @docker_dir Path.join(@repo_root, "deploy/docker")
+  @config_file Path.join(@repo_root, "config/config.exs")
+  @compose_files ~w(
+    docker-compose.repo-a.yml
+    docker-compose.repo-b.yml
+    docker-compose.repo-c.yml
+  )
+  @workflow_files ~w(
+    ../../WORKFLOW.md
+    workflows/repo-a.WORKFLOW.md
+    workflows/repo-b.WORKFLOW.md
+    workflows/repo-c.WORKFLOW.md
+  )
+
+  test "runtime image is non-root and has dashboard-independent liveness" do
+    dockerfile = read!("Dockerfile")
+
+    assert dockerfile =~ "USER symphony"
+    assert dockerfile =~ "HEALTHCHECK"
+    assert dockerfile =~ "/proc/1/comm"
+    refute dockerfile =~ "SYMPHONY_DASHBOARD"
+  end
+
+  test "immutable release disables tzdata writes under the read-only app tree" do
+    config = File.read!(@config_file)
+
+    assert config =~ "config :tzdata, :autoupdate, :disabled"
+  end
+
+  test "entrypoint stages only Codex auth and config in the runtime home" do
+    entrypoint = read!("entrypoint.sh")
+
+    assert entrypoint =~ "/run/host-codex/auth.json"
+    assert entrypoint =~ "/run/host-codex/config.toml"
+    assert entrypoint =~ "CODEX_HOME"
+    assert entrypoint =~ "/.codex}"
+    refute entrypoint =~ "cp -a /run/host-codex/."
+    refute entrypoint =~ "/root/.codex"
+  end
+
+  test "all compose variants enforce least privilege and bounded resources" do
+    for file <- @compose_files do
+      compose = read!(file)
+
+      assert compose =~ "no-new-privileges:true", file
+      assert compose =~ ~r/cap_drop:\s*\n\s*- ALL/, file
+      assert compose =~ ~r/pids_limit:\s*\d+/, file
+      assert compose =~ ~r/cpus:\s*"[0-9.]+"/, file
+      assert compose =~ ~r/mem_limit:\s*\S+/, file
+      assert compose =~ "/auth.json:/run/host-codex/auth.json:ro", file
+      assert compose =~ "/config.toml:/run/host-codex/config.toml:ro", file
+      refute compose =~ "/.codex:/run/host-codex:ro", file
+    end
+  end
+
+  test "all shipped workflows default Codex to workspaceWrite" do
+    for file <- @workflow_files do
+      workflow = read!(file)
+
+      assert workflow =~ "thread-sandbox: workspaceWrite", file
+      refute workflow =~ "thread-sandbox: dangerFullAccess", file
+    end
+  end
+
+  defp read!(relative_path) do
+    @docker_dir
+    |> Path.join(relative_path)
+    |> File.read!()
+  end
+end
